@@ -1,0 +1,11 @@
+# PocketAide 知识图谱模块（tools/kg/）Python 依赖
+# 推荐 Python 3.14（开发实测；3.11+ 一般均可）
+#
+# 首次运行 `python tools/kg/kg.py index --all` 会自动下载 bge-m3 嵌入模型（约 2.2GB）到
+# HuggingFace 默认缓存（%USERPROFILE%\.cache\huggingface）。
+# 首次冷启动约 12s（加载模型）；之后嵌入常驻 daemon（127.0.0.1:8199）亚秒级响应。
+# 如需离线/指定模型，设环境变量 KG_EMBED_MODEL 指向本地模型路径。
+
+sentence-transformers
+torch
+numpy

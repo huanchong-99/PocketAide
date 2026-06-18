@@ -1,0 +1,65 @@
+# === PocketAide .gitignore ===
+
+# kg 知识图谱索引与向量缓存（可重建，不入库）
+.index/
+embeddings/
+
+# 飞书凭据 —— 绝不入库
+bridge/.env
+
+# 桥接运行期文件
+bridge/.bridge.lock
+bridge/.bridge-ran
+bridge/.tray-lang
+bridge/.session-id
+bridge/*.log
+
+# 任务归档运行期文件（runner 由 register-archive.ps1 生成、log 每次归档持续追加，均不入库）
+tasks/archive/.archive-runner.ps1
+tasks/archive/archive.log
+
+# 桥接专属 CLAUDE_CONFIG_DIR：独立的 projects/会话存储 + 复制来的 Max 凭据。
+# 含 .credentials.json，绝不入库。
+bridge/.claude-home/
+
+# 历史改写前的本地备份（仅本机留底，不入库）
+.backup/
+
+# 出件文件：claude 每轮把回复原文(markdown)写这里供桥接读取，读完即删。
+# 固定单文件、覆盖写，不累积；不入库。
+workspace/.outbox/
+
+# 密钥类
+*.key
+*.pem
+
+# 采集专用 Chrome profile（含 cookie / 登录态）
+.scrape-chrome-profile/
+# 任何位置误落的 Chrome 采集 profile 都不入库（曾有副本误落 workspace/）
+**/scrape-chrome-profile/
+workspace/scrape-chrome-profile/
+
+# 助理临时产物（workspace 正式产物仍入库，仅忽略临时件）
+workspace/tmp/
+workspace/**/*.tmp
+
+# Obsidian 本地工作区/视图状态（多设备会冲突、且会随操作频繁变动；vault 可能在 knowledge/ 子目录，故 ** 匹配任意层级）
+# 保留 app/appearance/core-plugins 等"稳定配置"入库；只忽略会频繁变动的工作区与视图状态。
+**/.obsidian/workspace.json
+**/.obsidian/workspace-mobile.json
+**/.obsidian/graph.json
+**/.obsidian/cache
+
+# Python 字节码缓存
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# 操作系统
+Thumbs.db
+desktop.ini
+.DS_Store

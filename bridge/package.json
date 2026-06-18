@@ -1,0 +1,17 @@
+{
+  "name": "pocketaide-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "PocketAide 桥接进程：飞书长连接 + 伪终端(ConPTY)驱动 claude。复用 Max 额度。",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "smoke": "node pty-smoke.js",
+    "claude-stub": "node pty-claude-stub.js"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.67.0",
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.0.0"
+  }
+}

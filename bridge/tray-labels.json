@@ -1,0 +1,30 @@
+{
+  "zh": {
+    "tooltip": "AI参谋 桥接（托盘运行中）",
+    "balloonTitle": "AI参谋 桥接",
+    "statusStarting": "状态：启动中…",
+    "statusRunning": "状态：运行中 (pid {0})",
+    "statusStopped": "状态：已停止",
+    "statusAutoRestarted": "状态：已自动重启",
+    "statusTooMany": "状态：已停止（崩溃过于频繁）",
+    "openLog": "打开日志",
+    "restart": "重启桥接",
+    "restarted": "桥接已重启。",
+    "exit": "退出",
+    "toggle": "切换语言 → English"
+  },
+  "en": {
+    "tooltip": "PocketAide Bridge (in tray)",
+    "balloonTitle": "PocketAide Bridge",
+    "statusStarting": "Status: starting...",
+    "statusRunning": "Status: running (pid {0})",
+    "statusStopped": "Status: stopped",
+    "statusAutoRestarted": "Status: auto-restarted",
+    "statusTooMany": "Status: stopped (too many crashes)",
+    "openLog": "Open Log",
+    "restart": "Restart Bridge",
+    "restarted": "Bridge restarted.",
+    "exit": "Exit",
+    "toggle": "Switch language → 中文"
+  }
+}
