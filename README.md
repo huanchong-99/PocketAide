@@ -6,6 +6,8 @@
 
 PocketAide turns [Claude Code](https://claude.com/claude-code) into an always-on personal secretary: you send a message in Feishu, it drives an **interactive** `claude` through a pseudo-terminal (reusing your Max quota, **not** the pay-per-token API), and sends the reply back to Feishu. It manages a local knowledge base (semantic + full-text + wikilink-graph retrieval), tracks tasks, schedules reminders, and scrapes web pages / transcribes Douyin videos — all data stays in a Git repo on your own machine.
 
+> 💬 **Discussion & community:** [LINUX DO](https://linux.do/)
+
 ## What it can do
 
 - **Feishu chat → Claude Code**: a Feishu long-connection receives messages, a pseudo-terminal (ConPTY) drives interactive `claude`, and the markdown reply goes back to Feishu

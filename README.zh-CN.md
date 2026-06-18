@@ -6,6 +6,8 @@
 
 PocketAide 把 [Claude Code](https://claude.com/claude-code) 变成一个常驻的私人秘书：你在飞书里发消息，它通过伪终端驱动**交互式** `claude`（复用你的 Max 额度，**不**走按量付费 API），把回复发回飞书。它会管理本地知识库（语义检索 + 全文 + wikilink 图）、追踪任务、定时提醒、采集网页/抖音转写——所有数据留在你本机的 Git 仓库里。
 
+> 💬 **交流讨论：** [LINUX DO](https://linux.do/)
+
 ## 它能做什么
 
 - **飞书对话 → Claude Code**：飞书长连接收消息，伪终端（ConPTY）驱动交互式 `claude`，markdown 回复发回飞书
