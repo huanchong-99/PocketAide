@@ -262,9 +262,14 @@ function prepareConfigHome() {
   try {
     fs.mkdirSync(path.join(BRIDGE_HOME, 'projects'), { recursive: true });
     const src = path.join(os.homedir(), '.claude');
-    // 复制 Max 凭据/设置(每次启动覆盖, 始终用最新 token；claude 运行中会刷新自己这份副本, 互不影响)。
-    for (const f of ['.credentials.json', 'settings.json', 'config.json']) {
-      try { fs.copyFileSync(path.join(src, f), path.join(BRIDGE_HOME, f)); } catch (_) {}
+    // 凭据每次都从全局刷新：Max token 会轮换, 不取最新会掉登录, 故凭据始终以全局为准。
+    try { fs.copyFileSync(path.join(src, '.credentials.json'), path.join(BRIDGE_HOME, '.credentials.json')); } catch (_) {}
+    // settings.json / config.json：本地优先、全局兜底。本地已存在就保留(桥接自己决定 effort 等行为,
+    // 不再被全局覆盖)；本地不存在才从全局播种一次。修复原先"每次启动都用全局覆盖本地、本地永远说了不算"的逻辑 bug。
+    for (const f of ['settings.json', 'config.json']) {
+      const dst = path.join(BRIDGE_HOME, f);
+      if (fs.existsSync(dst)) continue;
+      try { fs.copyFileSync(path.join(src, f), dst); } catch (_) {}
     }
     // CLAUDE_CONFIG_DIR/.claude.json 保存信任/项目元数据。首次从主配置复制(带上对本仓库的信任),
     // 之后保留桥接自己累积的会话元数据(不覆盖)，每次仅确保本仓库的信任键存在(免去信任弹窗卡住)。
