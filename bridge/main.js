@@ -265,11 +265,29 @@ function prepareConfigHome() {
     // 凭据每次都从全局刷新：Max token 会轮换, 不取最新会掉登录, 故凭据始终以全局为准。
     try { fs.copyFileSync(path.join(src, '.credentials.json'), path.join(BRIDGE_HOME, '.credentials.json')); } catch (_) {}
     // settings.json / config.json：本地优先、全局兜底。本地已存在就保留(桥接自己决定 effort 等行为,
-    // 不再被全局覆盖)；本地不存在才从全局播种一次。修复原先"每次启动都用全局覆盖本地、本地永远说了不算"的逻辑 bug。
-    for (const f of ['settings.json', 'config.json']) {
-      const dst = path.join(BRIDGE_HOME, f);
-      if (fs.existsSync(dst)) continue;
-      try { fs.copyFileSync(path.join(src, f), dst); } catch (_) {}
+    // 不再被全局覆盖)；本地不存在才从全局播种一次。
+    // 但 settings.json 里的 ANTHROPIC_* 供应商相关 env 必须每次从全局同步——否则用户切换全局供应商
+    // (改 ~/.claude/settings.json 的 ANTHROPIC_BASE_URL/AUTH_TOKEN/MODEL 等)后，桥接这份永不更新、
+    // 切不过去(实测坑:旧值留着 + .credentials.json 每次刷新的 OAuth 凭据，合力把请求推回旧供应商/官方订阅)。
+    // 其它字段(hooks/plugins/effort 等)仍本地优先；config.json 也仍本地优先、播种一次。
+    {
+      const dstS = path.join(BRIDGE_HOME, 'settings.json');
+      const srcS = path.join(src, 'settings.json');
+      if (fs.existsSync(dstS) && fs.existsSync(srcS)) {
+        try {
+          const cur = JSON.parse(fs.readFileSync(dstS, 'utf8'));
+          const glb = JSON.parse(fs.readFileSync(srcS, 'utf8'));
+          if (glb.env) {
+            cur.env = cur.env || {};
+            for (const k of Object.keys(glb.env)) if (k.startsWith('ANTHROPIC_')) cur.env[k] = glb.env[k];
+          }
+          fs.writeFileSync(dstS, JSON.stringify(cur, null, 2));
+        } catch (_) {}
+      } else if (!fs.existsSync(dstS)) {
+        try { fs.copyFileSync(srcS, dstS); } catch (_) {}
+      }
+      const dstC = path.join(BRIDGE_HOME, 'config.json');
+      if (!fs.existsSync(dstC)) { try { fs.copyFileSync(path.join(src, 'config.json'), dstC); } catch (_) {} }
     }
     // CLAUDE_CONFIG_DIR/.claude.json 保存信任/项目元数据。首次从主配置复制(带上对本仓库的信任),
     // 之后保留桥接自己累积的会话元数据(不覆盖)，每次仅确保本仓库的信任键存在(免去信任弹窗卡住)。
