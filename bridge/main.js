@@ -365,8 +365,9 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
   // 未完成消息数(已收到、还没发出最终答案)。秒回执用它同步算出"前面还有几条"——同步 ++/--
   // 保证并发回调互相看得到, 极快连发也能给出准确排队位置。每条在 pump 收尾时回落(见 finally)。
   let pendingCount = 0;
-  let pendingImage = null;   // 聚合：图先到、等字配对。{ path, openId, mid, timer }
-  let pendingText = null;    // 聚合：字先到、等图配对。{ text, openId, mid, timer }
+  let agg = null;   // 聚合缓冲：IMG_WAIT_MS 窗口内到达的所有图+字都攒这，窗口结束合成一条发给那一轮。
+                    // 图字顺序任意(先字后图/先图后字/混发/多图多字)，窗口只认"在窗口内到达就累积"。
+                    // { images: [绝对路径...], text: '累积文字'|null, openId, mid, timer }
   let starting = false;            // claude.start() 进行中：抑制 exit-handler 重启(由启动流程自行兜底)
   let restarting = false;          // 恢复/唤醒期间：闸住 pump，积压的消息等恢复后再 drain
   let recoverInFlight = false;     // 防止重叠的恢复周期
@@ -377,15 +378,28 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
   // 构造喂给 claude 的图片 prompt：绝对路径 + 可选附言。
   // 理解方式(重要)：优先用图片理解 MCP(analyze_image, 返回文本描述、不依赖模型多模态注入,
   //   从而绕过 PTY 环境下 Read 视觉不生效的命门)；仅当该 MCP 不可用时才回退到 Read 的模型视觉。
-  function buildImagePrompt(imagePath, text) {
-    const t = (text || '').trim();
+  function buildImagePrompt(imagePaths, text) {
+    const paths = Array.isArray(imagePaths) ? imagePaths : [imagePaths];
+    const multi = paths.length > 1;
+    const list = paths.map((p, i) => '图' + (i + 1) + ': ' + p).join('\n');
     const base =
-      '用户发来一张图片，本地路径：\n' + imagePath +
-      '\n\n【如何理解这张图（按顺序，重要）】' +
-      '1) 优先调用图片理解 MCP 工具 analyze_image（把上面的本地路径作为 image_source 传入），用它的返回结果理解图片；' +
-      '2) 仅当该 MCP 不可用时，才改用 Read 工具的模型自带视觉查看。';
+      '用户发来 ' + paths.length + ' 张图片，本地路径：\n' + list +
+      '\n\n【如何理解这些图（按顺序，重要）】' +
+      '1) 对每张图分别调用图片理解 MCP 工具 analyze_image（image_source = 该图的本地路径），逐张理解；' +
+      (multi ? '2) 这是多张图，全部理解后再综合对比/关联，一起回答；' : '2) 理解后回答；') +
+      '3) 仅当该 MCP 不可用时，才改用 Read 工具的模型自带视觉逐张查看。';
+    const t = (text || '').trim();
     if (t) return base + '\n\n用户附言：' + t;
-    return base + '\n\n（这是单发的图片，没有附加文字。请理解后简要描述并回应。）';
+    return base + '\n\n（这是用户单发图片，没有附加文字。请理解后' + (multi ? '并综合' : '') + '简要描述并回应。）';
+  }
+  // 聚合窗口结束：把攒下的所有图路径(+字)合成一条 prompt 入队。图字顺序无关，窗口内到齐就发。
+  function flushAgg() {
+    if (!agg) return;
+    const a = agg; agg = null;
+    if (a.timer) clearTimeout(a.timer);
+    const hasImg = a.images && a.images.length;
+    if (hasImg) enqueue({ openId: a.openId, text: buildImagePrompt(a.images, a.text), mid: a.mid, imagePath: a.images });
+    else if (a.text) enqueue({ openId: a.openId, text: a.text, mid: a.mid });
   }
   // 提取错误摘要：飞书 SDK 错误常带 code/msg，普通 Error 只有 message。
   function errDetail(e) {
@@ -446,8 +460,11 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
       } finally {
         pendingCount = Math.max(0, pendingCount - 1);  // 本条收尾(成功/失败/中断都减), 排队计数回落
         if (imagePath) {                                 // 图片临时文件：本轮答完(claude 已 Read)即删, 不残留; workspace/tmp TTL 兜底
-          if (rmFileSync(imagePath)) log('临时图片已删:', imagePath);
-          else log('⚠️ 临时图片删除失败(将由 TTL 清理):', imagePath);
+          const imgPaths = Array.isArray(imagePath) ? imagePath : [imagePath];
+          for (const p of imgPaths) {
+            if (rmFileSync(p)) log('临时图片已删:', p);
+            else log('⚠️ 临时图片删除失败(将由 TTL 清理):', p);
+          }
         }
       }
     }
@@ -610,7 +627,7 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
       return;
     }
 
-    // === 图片消息：下载 + 聚合配对 ===（图字到达顺序不保证；图来时若有字在等图就合并，否则图等字）
+    // === 图片消息：下载 + 累积进聚合窗口 ===（10秒窗口内多图/图字混发都攒同一份，到时合成一条发给那一轮）
     const imageKey = extractImage(msg);
     if (imageKey) {
       try { fs.mkdirSync(IMG_DIR, { recursive: true }); } catch (_) {}
@@ -627,37 +644,21 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
         return;
       }
       log('图片下载成功:', dest);
-      // 配对：有文字在等图(字先到) → 合并成一条
-      if (pendingText) {
-        const pt = pendingText; pendingText = null;
-        if (pt.timer) clearTimeout(pt.timer);
-        log('图片配对到等待中的文字，合并发送。');
-        enqueue({ openId: pt.openId, text: buildImagePrompt(dest, pt.text), mid: pt.mid, imagePath: dest });
-        return;
+      // 累积进聚合缓冲(窗口内多图/图字混发都攒同一份); 首张才发回执卡并计数，后续图静默累积(不刷屏)
+      if (!agg || agg.openId !== sender) {
+        const ahead = pendingCount;
+        pendingCount += 1;
+        agg = { images: [], text: null, openId: sender, mid: null };
+        try {
+          const hint = ahead > 0 ? `📥 收到图片，前面还有 ${ahead} 条在处理…` : '🤔 收到图片，' + Math.round(IMG_WAIT_MS / 1000) + ' 秒内的图片/文字会一起处理…';
+          agg.mid = await feishu.sendCard(sender, hint, HEADER);
+        } catch (e) { log('图片回执卡失败(忽略):', e.message); }
       }
-      // 连发多图：前一张未等到文字的图先单发(清窗口)，再处理新图
-      if (pendingImage) {
-        const old = pendingImage; pendingImage = null;
-        if (old.timer) clearTimeout(old.timer);
-        log('连发图片：前一张未等到文字，先单发。');
-        enqueue({ openId: old.openId, text: buildImagePrompt(old.path, null), mid: old.mid, imagePath: old.path });
-      }
-      // 新图等字
-      const ahead = pendingCount;
-      pendingCount += 1;
-      let imid = null;
-      try {
-        const hint = ahead > 0 ? `📥 收到图片，前面还有 ${ahead} 条在处理…` : '🤔 收到图片，等你的文字…（' + Math.round(IMG_WAIT_MS / 1000) + ' 秒内发字会一起处理，否则单独看图）';
-        imid = await feishu.sendCard(sender, hint, HEADER);
-      } catch (e) { log('图片回执卡失败(忽略):', e.message); }
-      const pi = { path: dest, openId: sender, mid: imid };
-      pi.timer = setTimeout(() => {
-        if (pendingImage !== pi) return;          // 已被文字配走，跳过
-        pendingImage = null;
-        log('图片未等到文字，单发。');
-        enqueue({ openId: pi.openId, text: buildImagePrompt(pi.path, null), mid: pi.mid, imagePath: pi.path });
-      }, IMG_WAIT_MS);
-      pendingImage = pi;
+      agg.images.push(dest);
+      log('图片已累积进聚合窗口，当前图数:', agg.images.length);
+      // 重置聚合窗口(每次到达都重灌 10 秒)
+      if (agg.timer) clearTimeout(agg.timer);
+      agg.timer = setTimeout(flushAgg, IMG_WAIT_MS);
       return;
     }
 
@@ -672,44 +673,25 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
       await triggerNewConversation(sender);
       return;
     }
-    // 配对：有图片在等字(图先到) → 合并成一条(图路径 + 文字)
-    if (pendingImage) {
-      const pi = pendingImage; pendingImage = null;
-      if (pi.timer) clearTimeout(pi.timer);
-      log('文字配对到等待中的图片，合并发送。');
-      enqueue({ openId: pi.openId, text: buildImagePrompt(pi.path, text), mid: pi.mid, imagePath: pi.path });
-      return;
+    // 累积进聚合缓冲(窗口内多字/字图混发都攒同一份); 首条才发回执卡并计数，后续静默累积(不刷屏)
+    if (!agg || agg.openId !== sender) {
+      const ahead = pendingCount;            // 同步快照: 我之前还有几条未完成 = "前面还有 N 条"
+      pendingCount += 1;
+      agg = { images: [], text: null, openId: sender, mid: null };
+      try {
+        const hint = ahead > 0
+          ? `📥 收到了，前面还有 ${ahead} 条在处理，轮到就回你…`
+          : '🤔 正在思考…';
+        agg.mid = await feishu.sendCard(sender, hint, HEADER);
+        log(ahead > 0 ? `飞书排队回执 message_id= ${agg.mid} (前面 ${ahead} 条)` : `飞书思考卡 message_id= ${agg.mid}`);
+      } catch (e) {
+        log('发送回执卡失败(忽略):', e.message);  // 发卡失败也照常入队; pump 里 mid 为空会退回直接发答案
+      }
     }
-    // 连发多字：前一条未等到图片的文字先单发(清窗口)，再处理新字
-    if (pendingText) {
-      const old = pendingText; pendingText = null;
-      if (old.timer) clearTimeout(old.timer);
-      log('连发文字：前一条未等到图片，先单发。');
-      enqueue({ openId: old.openId, text: old.text, mid: old.mid });
-    }
-    // 新字等图（聚合窗口）：图字到达顺序不保证，故字也要等图。⚠️ 代价：纯文字也会等满此窗口才发。
-    // 秒回执：消息一到就立刻发一张专属卡片(不等前一轮)，并把它的 id 跟这条消息绑死——之后从
-    // 「收到/排队」→「思考中」→「最终答案」全程更新这同一张卡, 一条对一条, 不另发新卡、不串台。
-    const ahead = pendingCount;            // 同步快照: 我之前还有几条未完成 = "前面还有 N 条"
-    pendingCount += 1;
-    let mid = null;
-    try {
-      const hint = ahead > 0
-        ? `📥 收到了，前面还有 ${ahead} 条在处理，轮到就回你…`
-        : '🤔 正在思考…';
-      mid = await feishu.sendCard(sender, hint, HEADER);
-      log(ahead > 0 ? `飞书排队回执 message_id= ${mid} (前面 ${ahead} 条)` : `飞书思考卡 message_id= ${mid}`);
-    } catch (e) {
-      log('发送回执卡失败(忽略):', e.message);  // 发卡失败也照常入队; pump 里 mid 为空会退回直接发答案
-    }
-    const pt = { text, openId: sender, mid };
-    pt.timer = setTimeout(() => {
-      if (pendingText !== pt) return;            // 已被图片配走，跳过
-      pendingText = null;
-      log('文字未等到图片，单发。');
-      enqueue({ openId: pt.openId, text: pt.text, mid: pt.mid });
-    }, IMG_WAIT_MS);
-    pendingText = pt;
+    agg.text = agg.text ? agg.text + '\n' + text : text;
+    // 重置聚合窗口(每次到达都重灌 10 秒)
+    if (agg.timer) clearTimeout(agg.timer);
+    agg.timer = setTimeout(flushAgg, IMG_WAIT_MS);
   });
 
   if (cfg.ownerOpenId) {
