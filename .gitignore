@@ -63,3 +63,11 @@ yarn-error.log*
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Python 虚拟环境（video-note 等 skill 的独立 venv，含 torch/funasr 等 GB 级依赖，不入库）
+.venv-video-note/
+.venv*/
+venv/
+
+# ASR 模型文件（SenseVoice + VAD 等，GB 级，从 hf-mirror/modelscope 下到本地，不入库）
+models/

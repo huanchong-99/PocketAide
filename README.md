@@ -4,7 +4,7 @@
 
 > A pocket AI secretary — a Feishu (Lark) chat UI + a Claude Code brain + a local knowledge graph for long-term memory. Runs on your own Windows machine, reuses your Claude Max subscription, **zero extra API cost**.
 
-PocketAide turns [Claude Code](https://claude.com/claude-code) into an always-on personal secretary: you send a message in Feishu, it drives an **interactive** `claude` through a pseudo-terminal (reusing your Max quota, **not** the pay-per-token API), and sends the reply back to Feishu. It manages a local knowledge base (semantic + full-text + wikilink-graph retrieval), tracks tasks, schedules reminders, and scrapes web pages / transcribes Douyin videos — all data stays in a Git repo on your own machine.
+PocketAide turns [Claude Code](https://claude.com/claude-code) into an always-on personal secretary: you send a message in Feishu, it drives an **interactive** `claude` through a pseudo-terminal (reusing your Max quota, **not** the pay-per-token API), and sends the reply back to Feishu. It manages a local knowledge base (semantic + full-text + wikilink-graph retrieval), tracks tasks, schedules reminders, and scrapes web pages / transcribes videos (Douyin / Bilibili / local files, via local SenseVoice ASR on GPU) — all data stays in a Git repo on your own machine.
 
 > 💬 **Discussion & community:** [LINUX DO](https://linux.do/)
 
@@ -14,7 +14,7 @@ PocketAide turns [Claude Code](https://claude.com/claude-code) into an always-on
 - **Local knowledge graph (kg)**: bge-m3 vectors + SQLite FTS5 full-text + a wikilink relation graph — three-way hybrid retrieval; atomic knowledge notes + confirm-before-write
 - **Task tracking**: one markdown file per task, progress appended, archived when due (only touches completed tasks)
 - **Scheduled reminders**: registered as Windows scheduled tasks, delivered to Feishu on time, any time zone
-- **Web scraping / Douyin transcription**: drives a debug Chrome; results can be saved into the knowledge base
+- **Web scraping / Video transcription**: drives a debug Chrome to scrape pages and fetch Douyin / Bilibili / local-video streams; local SenseVoice ASR (GPU) transcribes them to text for the knowledge base (no cloud dependency)
 - **System-tray resident**: auto-start on boot, heartbeat self-heal, full restart on each new conversation
 
 ## Core constraints (design trade-offs)
@@ -48,7 +48,7 @@ Knowledge retrieval is provided by `tools/kg/` (`kg.py` + `embedder.py` + `embed
 - **Python 3.11+** (the knowledge-graph module; developed/tested on 3.14)
 - **Claude Code CLI** (`claude`) + a **Claude Max subscription** (reusing the Max quota is the whole point)
 - **A self-built Feishu app** (use "long connection" mode; see `bridge/SETUP-飞书.md`)
-- **Chrome** (for web scraping / Douyin transcription; optional)
+- **Chrome** (for web scraping / video transcription; optional)
 
 ## Set up from scratch
 
@@ -166,7 +166,7 @@ For the knowledge-note format, see `knowledge/example/`; for the task/reminder f
 - **Windows-only**: deeply tied to ConPTY, PowerShell 5.1, and Windows Task Scheduler
 - **Reuses Max**: requires a Claude Max subscription + a local `claude` CLI; not for pay-per-token API users
 - **bge-m3 first download**: ~2.2GB (auto-downloaded from HuggingFace, cached afterward)
-- **Test suite isn't CI-friendly**: `tools/test/run-all.js` actually spins up a `claude` session for the end-to-end runs (needs local Max); some scenarios such as Douyin transcription depend on a real browser and can't run headless
+- **Test suite isn't CI-friendly**: `tools/test/run-all.js` actually spins up a `claude` session for the end-to-end runs (needs local Max); some scenarios such as video transcription depend on a real browser and can't run headless
 
 ## Docs
 
@@ -179,6 +179,8 @@ For the knowledge-note format, see `knowledge/example/`; for the task/reminder f
 - [Lark / Feishu Open SDK](https://github.com/larksuite)
 - [Claude Code](https://claude.com/claude-code)
 - [node-pty](https://github.com/microsoft/node-pty) / [xterm.js](https://xtermjs.org/)
+- [FunAudioLLM/SenseVoice](https://huggingface.co/FunAudioLLM/SenseVoice) (Apache-2.0, multilingual speech recognition — powers video-note transcription)
+- [modelscope/FunASR](https://github.com/modelscope/FunASR) (Apache-2.0, speech recognition toolkit)
 
 ## License
 

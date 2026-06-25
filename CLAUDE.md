@@ -124,7 +124,7 @@ python tools/kg/kg.py overview [--tag <标签>]      # 计数概览 total_nodes/
 | `task-manage` | 任务登记/更新/查询/完成/归档 | ✅ 已落地，接 `tools/tasks/archive.py` |
 | `web-scrape` | 网页采集（chrome-devtools MCP） | ✅ 已落地 |
 | `remind` | 定时提醒（计划任务 + 飞书通知） | ✅ 已落地，接 `scripts/*-reminder.ps1` + `bridge/send-reminder.js` |
-| `douyin-transcribe` | 抖音视频转写（豆包办公任务 + 剪贴板取回）→ 交知识摄入 | ✅ 已落地（抖音专属），接 chrome-devtools MCP + 系统剪贴板 + `bridge/send-reminder.js` 兜底 |
 | `call-claude-codex` | 在指定目录调用子 Claude Code / codex 做编程任务（headless + 二次确认带警告） | ✅ 已落地，接 `claude`/`codex` CLI |
+| `video-note` | 视频转写+笔记（抖音/B站/本地文件，SenseVoice GPU+VAD，替代豆包转写） | ✅ 已落地，接 funasr(`.venv-video-note`) + chrome-devtools + knowledge-write |
 
-> 七个 skill 均已落地并接真实底层代码，按各自 SKILL.md 执行（`douyin-transcribe` 为抖音视频转写，走豆包办公任务 + 剪贴板取回）。端到端与工具层测试见 `tools/test/`（`run-all.js` 一键跑；`douyin-transcribe` 依赖真实浏览器/账号/剪贴板，无法 headless，故不在自动化测试内）。
+> 七个 skill 均已落地并接真实底层代码，按各自 SKILL.md 执行。视频转写由 **`video-note`** 统一负责（抖音路线B页面取流 + B站公开 playurl + 本地文件，SenseVoice GPU+VAD 转写）；原 douyin-transcribe（豆包云方案、不稳定）已移除。端到端与工具层测试见 `tools/test/`（`run-all.js` 一键跑；`video-note` 依赖真实浏览器，不在自动化测试内）。

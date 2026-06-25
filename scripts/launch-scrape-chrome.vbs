@@ -38,7 +38,8 @@ End If
 cmd = """" & chrome & """" & _
       " --remote-debugging-port=9222" & _
       " --user-data-dir=""" & profile & """" & _
-      " --no-first-run --no-default-browser-check"
+      " --no-first-run --no-default-browser-check" & _
+      " --mute-audio"
 
 ' arg2 = 1 (normal visible window, so you can log into sites); arg3 = False (don't wait)
 shell.Run cmd, 1, False

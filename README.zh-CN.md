@@ -4,7 +4,7 @@
 
 > 口袋随身 AI 秘书 —— 飞书聊天界面 + Claude Code 大脑 + 本地知识图谱长期记忆，跑在你自己的 Windows 上，复用 Claude Max 订阅、**零额外 API 费用**。
 
-PocketAide 把 [Claude Code](https://claude.com/claude-code) 变成一个常驻的私人秘书：你在飞书里发消息，它通过伪终端驱动**交互式** `claude`（复用你的 Max 额度，**不**走按量付费 API），把回复发回飞书。它会管理本地知识库（语义检索 + 全文 + wikilink 图）、追踪任务、定时提醒、采集网页/抖音转写——所有数据留在你本机的 Git 仓库里。
+PocketAide 把 [Claude Code](https://claude.com/claude-code) 变成一个常驻的私人秘书：你在飞书里发消息，它通过伪终端驱动**交互式** `claude`（复用你的 Max 额度，**不**走按量付费 API），把回复发回飞书。它会管理本地知识库（语义检索 + 全文 + wikilink 图）、追踪任务、定时提醒、采集网页、转写抖音/B站/本地视频——所有数据留在你本机的 Git 仓库里。
 
 > 💬 **交流讨论：** [LINUX DO](https://linux.do/)
 
@@ -14,7 +14,7 @@ PocketAide 把 [Claude Code](https://claude.com/claude-code) 变成一个常驻�
 - **本地知识图谱（kg）**：bge-m3 向量 + SQLite FTS5 全文 + wikilink 关系图，三路混合检索；原子化知识笔记 + 写入前二次确认
 - **任务追踪**：一任务一 md，进度追加，到期归档（只动已完成）
 - **定时提醒**：注册成 Windows 计划任务，到点飞书通知，支持任意时区
-- **网页采集 / 抖音转写**：驱动调试 Chrome，采集结果可入知识库
+- **网页采集 / 视频转写**：驱动调试 Chrome 采集网页；取抖音/B站/本地视频流，本地 SenseVoice(GPU) 转写成文字入知识库（不依赖云端豆包）
 - **系统托盘常驻**：开机自启、心跳自愈、新对话全量重启
 
 ## 核心约束（设计取舍）
@@ -48,7 +48,7 @@ PocketAide 把 [Claude Code](https://claude.com/claude-code) 变成一个常驻�
 - **Python 3.11+**（知识图谱模块；开发实测 3.14）
 - **Claude Code CLI**（`claude`）+ **Claude Max 订阅**（项目核心就是复用 Max 额度）
 - **飞书自建应用**（用「长连接」模式，详见 `bridge/SETUP-飞书.zh-CN.md`）
-- **Chrome**（网页采集 / 抖音转写用，可选）
+- **Chrome**（网页采集 / 视频转写用，可选）
 
 ## 从零搭建
 
@@ -166,7 +166,7 @@ CLAUDE.md     Claude Code 进入项目的行为契约（项目灵魂）
 - **Windows-only**：ConPTY、PowerShell 5.1、Windows 计划任务深度绑定
 - **复用 Max**：必须有 Claude Max 订阅 + 本地 `claude` CLI；不适用按量 API 用户
 - **bge-m3 首次下载**：约 2.2GB（HuggingFace 自动下载，后续复用缓存）
-- **测试套件非 CI 友好**：`tools/test/run-all.js` 会真起一个 `claude` 会话跑端到端，需本地 Max；抖音转写等部分场景依赖真实浏览器，无法 headless
+- **测试套件非 CI 友好**：`tools/test/run-all.js` 会真起一个 `claude` 会话跑端到端，需本地 Max；视频转写等部分场景依赖真实浏览器，无法 headless
 
 ## 文档
 
@@ -179,6 +179,8 @@ CLAUDE.md     Claude Code 进入项目的行为契约（项目灵魂）
 - [Lark / 飞书 Open SDK](https://github.com/larksuite)
 - [Claude Code](https://claude.com/claude-code)
 - [node-pty](https://github.com/microsoft/node-pty) / [xterm.js](https://xtermjs.org/)
+- [FunAudioLLM/SenseVoice](https://huggingface.co/FunAudioLLM/SenseVoice)（Apache-2.0，多语言语音识别，驱动 video-note 转写）
+- [modelscope/FunASR](https://github.com/modelscope/FunASR)（Apache-2.0，语音识别框架）
 
 ## License
 
