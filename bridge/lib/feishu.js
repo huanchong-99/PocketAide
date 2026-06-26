@@ -19,10 +19,87 @@ function toFeishuMd(md) {
   return s;
 }
 
+// 飞书卡片 markdown 组件不支持 GFM 表格(官方限制: 表格不在其支持语法列表内),
+// 表格里的 | 会原样显示成字符(用户反馈"发过去的表格没法渲染, 监控项目却可以")。
+// 监控项目能渲染正是用了飞书原生 table 组件(tag:table)。这里在构造卡片前把 GFM 表格
+// 提取出来转成原生 table 组件, 其余文本仍走 markdown 组件——表格可正常渲染, 其它格式
+// (粗体/列表/代码块/标题)完全不变。向后兼容: 无表格时输出与原 card() 逐字节一致。
+function splitMarkdownByTables(md) {
+  const out = [];
+  const lines = String(md).split('\n');
+  let textBuf = [];
+  const flushText = () => {
+    if (!textBuf.length) return;
+    const t = textBuf.join('\n');
+    textBuf = [];
+    if (t.replace(/\s/g, '').length) out.push({ type: 'text', content: t });
+  };
+  // 一行像不像表格行: 含 | 且去首尾 | 后仍能切出 >=2 段
+  const isTableRow = (l) => {
+    const s = l.trim();
+    if (!s.includes('|')) return false;
+    const body = s.replace(/^\|+/, '').replace(/\|+$/, '');
+    return body.split('|').length >= 2;
+  };
+  // 分隔行: | :--- | ---: | :--: |(每段是 -、左右可选冒号)
+  const isSeparator = (l) => {
+    const s = l.trim().replace(/^\|+/, '').replace(/\|+$/, '');
+    if (!s.includes('-')) return false;
+    return s.split('|').every((c) => /^:?-{1,}:?\s*$/.test(c.trim()));
+  };
+  const parseRow = (l) => {
+    const s = l.trim().replace(/^\|+/, '').replace(/\|+$/, '');
+    return s.split('|').map((c) => c.trim());
+  };
+  // 飞书 table 单元格不渲染 markdown, 转纯文本(去掉行内标记, 保留字面内容)
+  const cellText = (c) => c
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')   // [txt](url) -> txt
+    .replace(/\*\*(.+?)\*\*/g, '$1')           // **x** -> x
+    .replace(/__(.+?)__/g, '$1')               // __x__ -> x
+    .replace(/~~(.+?)~~/g, '$1')               // ~~x~~ -> x
+    .replace(/`([^`]+)`/g, '$1')               // `x` -> x
+    .replace(/\*([^*]+)\*/g, '$1')             // *x* -> x
+    .trim();
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (isTableRow(line) && i + 1 < lines.length && isSeparator(lines[i + 1])) {
+      flushText();
+      const header = parseRow(line).map(cellText);
+      const rows = [];
+      let j = i + 2;                            // 跳过表头 + 分隔行
+      while (j < lines.length && isTableRow(lines[j])) {
+        const cells = parseRow(lines[j]).map(cellText);
+        const row = {};
+        header.forEach((_, idx) => { row['c' + idx] = cells[idx] !== undefined ? cells[idx] : ''; });
+        rows.push(row);
+        j++;
+      }
+      out.push({
+        type: 'table',
+        columns: header.map((_, idx) => ({ name: 'c' + idx, display_name: header[idx] || '', data_type: 'text' })),
+        rows,
+      });
+      i = j;
+    } else {
+      textBuf.push(line);
+      i++;
+    }
+  }
+  flushText();
+  return out;
+}
+
 function card(markdown, header) {
+  const segs = splitMarkdownByTables(markdown);
+  const elements = segs.length
+    ? segs.map((seg) => (seg.type === 'table'
+        ? { tag: 'table', columns: seg.columns, rows: seg.rows }
+        : { tag: 'markdown', content: toFeishuMd(seg.content) }))
+    : [{ tag: 'markdown', content: toFeishuMd(markdown) }];
   const c = {
     config: { wide_screen_mode: true },
-    elements: [{ tag: 'markdown', content: toFeishuMd(markdown) }],
+    elements,
   };
   if (header) c.header = { title: { tag: 'plain_text', content: header } };
   return c;
