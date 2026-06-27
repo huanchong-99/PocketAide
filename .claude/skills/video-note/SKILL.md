@@ -29,12 +29,25 @@ description: 把抖音/B站/本地视频转成文字并整理成知识笔记。�
 - 本地文件路径（`.mp4`/`.wav`/...）→ 【本地】
 - 拿不准 → 问用户，别猜
 
+### 【启动采集 Chrome】（抖音/B站公共前置；本地路线跳过）
+chrome-devtools MCP 配的是 `--browserUrl=http://127.0.0.1:9222`（只连已有实例，**自己不起 Chrome**）。取流前必须确保 9222 在监听——没开 chrome-devtools 全废。
+
+**一条命令**（脚本内部自动探活→没开才 wscript 起 vbs→等+复探活，幂等）：
+```
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/launch-scrape-chrome.ps1
+```
+看 stdout：`READY ...` = 9222 就绪，继续取流；`FAILED ...` = 起不来，**立即停下向用户报告**"采集 Chrome 启动失败，9222 未就绪"，**绝不自行诊断**（见禁止清单）。
+
+**关键**：必须用**相对路径** `scripts/launch-scrape-chrome.ps1`（cwd 是仓库根，相对路径无中文）。**绝不**在 bash 命令行里写中文路径调 powershell/cmd/wscript——仓库路径含中文，bash(UTF-8)→powershell(GBK) 会让中文乱码，Chrome 根本不会被启动（06-27 那次 `ask hard-timeout` 就栽在这：Chrome 压根没起来，claude 又没早停，自由诊断 chrome.exe 卡死 15 分钟）。
+
 ### 【抖音】取流（详见 references/douyin-fetch.md）
+0. 前置：先【启动采集 Chrome】确认 9222 就绪
 1. chrome-devtools `navigate_page` 到抖音链接（短链跳转后从最终 URL 取 aweme_id）
 2. chrome-devtools `evaluate_script` 执行 **douyin-fetch.md 里的取流 JS（整段照抄，别改；JS 开头已含静音行）** → 拿 play_url
 3. → 【关闭采集 Chrome】→ 【下载+转写】
 
 ### 【B站】取流（详见 references/bili-fetch.md）
+0. 前置：先【启动采集 Chrome】确认 9222 就绪
 1. chrome-devtools `navigate_page` 到B站链接
 2. chrome-devtools `evaluate_script` 执行 **bili-fetch.md 里的取流 JS（整段照抄；JS 开头已含静音行）** → 拿 audio_url + subtitles
 3. **若有字幕（CC）**：下字幕 json 解析成文本（省 ASR），→ 【关闭采集 Chrome】→ 【整理笔记】
@@ -43,7 +56,7 @@ description: 把抖音/B站/本地视频转成文字并整理成知识笔记。�
 ### 【关闭采集 Chrome】（取流拿到直链/字幕**后立即关**）
 拿到 play_url / audio_url / 字幕后立即关采集 Chrome（后续下载用 ffmpeg、转写用本地 ASR，不再需要浏览器）：
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "<仓库根>\scripts\close-scrape-chrome.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/close-scrape-chrome.ps1
 ```
 只关 9222 调试实例（按 profile/端口匹配），不碰日常 Chrome。【本地】路线没开浏览器，跳过此步。
 
@@ -95,6 +108,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<仓库根>\scripts\close-s
 - ❌ **transcribe.py / download_audio.py 内部不改**（参数固定；中文路径脚本自动处理）
 - ❌ **直链不缓存**（有时效，每次现取现下）
 - ❌ **evaluate_script 只执行 reference 里给的取流 JS**（JS 开头已含静音行，执行取流即同时静音，无需额外静音调用）——不用它干别的（不 querySelector 找元素、不模拟点击、不截图找元素、不读页面文本）。取流 JS 之外的页面交互一律禁止。
-- ❌ **取流/下载连续失败 2 次**：停下向用户报告原因，不死循环重试
+- ❌ **启动采集 Chrome / 取流 / 下载 连续失败 2 次**（含启动后 9222 端口复探活失败）：停下向用户报告原因，不死循环重试
+- ❌ **绝不自行诊断/换方式启动 Chrome**：启动只用 `launch-scrape-chrome.ps1`（相对路径调，它内部 wscript 起 vbs）。启动后端口复探活仍失败 → 立即停报告，**绝不**改用 cmd/headless、换版本子目录 exe、或在 bash 里直接调 `chrome.exe --version` 诊断（顶层 chrome.exe 是转发器，会挂住不返回；且 bash 命令行写中文路径调 powershell/cmd 会乱码——曾致整轮卡死 15 分钟触发 `ask hard-timeout`）
 - ❌ **笔记不直接写 knowledge/**：必须经 knowledge-write 二次确认
 - ❌ **模型不现下**：模型已在 `models/`，若缺失报错提示用户按 install.md 装，不自动联网下（慢且可能失败）
