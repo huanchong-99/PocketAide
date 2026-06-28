@@ -18,20 +18,15 @@ description: >-
 
 ## 第 1 步：确保调试 Chrome 已起（端口 9222）
 
-先探测，**已在跑就别重开**（复用登录态、避免多开）：
+**一条命令**（脚本内部自动探活 9222 → 没开才 wscript 起 vbs → 等 + 复探活，幂等）：
 
 ```bash
-curl -s -m 2 http://127.0.0.1:9222/json/version
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/launch-scrape-chrome.ps1
 ```
 
-- 有 JSON 返回（含 `webSocketDebuggerUrl`）→ 已就绪，直接进第 2 步。
-- 连不上 → 用 VBS 拉起（无 CMD 窗口、不杀主 Chrome、用专用持久 profile）。**必须用绝对路径**（`<仓库根>` 见 CLAUDE.md「路径占位」说明，执行前展开为仓库克隆的实际绝对根路径），别用相对路径——相对路径会被当成相对 skill 目录解析，导致"找不到脚本文件"：
+看 stdout：`READY ...` = 9222 就绪，进第 2 步；`FAILED ...` = 起不来，停下向用户报告"采集 Chrome 启动失败，9222 未就绪"，**不要**自己换方式诊断（见边界）。
 
-```bash
-wscript "<仓库根>\scripts\launch-scrape-chrome.vbs"
-```
-
-然后**轮询** `curl ...:9222/json/version`，直到有返回（一般 1–6 秒）再继续。
+**关键**：必须用**相对路径** `scripts/launch-scrape-chrome.ps1`（cwd 是仓库根，相对路径无中文）。**绝不**在 bash 命令行里写中文路径调 powershell/cmd/wscript——仓库路径含中文时，bash(UTF-8)→powershell(GBK) 会让中文乱码、wscript 找不到 vbs、Chrome 根本不会被启动。
 
 ## 第 2 步：导航到用户给的 URL
 
@@ -58,7 +53,7 @@ wscript "<仓库根>\scripts\launch-scrape-chrome.vbs"
 任务**全部完成后**关掉调试 Chrome，避免长期挂着：
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "<仓库根>\scripts\close-scrape-chrome.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/close-scrape-chrome.ps1
 ```
 
 它只关"调试实例"（按 9222 / 专用 profile 匹配），**不碰用户的日常 Chrome**。
@@ -66,6 +61,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<仓库根>\scripts\close-s
 
 ## 边界
 
-- 只在本仓库范围内活动；脚本一律用绝对路径 `<仓库根>\scripts\…`（别用相对路径，会被当成相对 skill 目录而找不到）。
+- 只在本仓库范围内活动；脚本用**相对路径** `scripts/...`（cwd 是仓库根）。**绝不**在 bash 命令行写中文绝对路径调 powershell/cmd——bash(UTF-8)→powershell(GBK) 会让中文乱码、脚本找不到（曾致 Chrome 起不来、claude 卡死）。
 - 需登录的站点：专用 profile 已持久化登录态，用户一次性登录后可复用；过期再补登。
 - 真要操作浏览器就走这个 skill，别用 `WebFetch`/`WebSearch` 代替——那俩到不了用户的登录会话。

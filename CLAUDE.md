@@ -128,3 +128,13 @@ python tools/kg/kg.py overview [--tag <标签>]      # 计数概览 total_nodes/
 | `video-note` | 视频转写+笔记（抖音/B站/本地文件，SenseVoice GPU+VAD，替代豆包转写） | ✅ 已落地，接 funasr(`.venv-video-note`) + chrome-devtools + knowledge-write |
 
 > 七个 skill 均已落地并接真实底层代码，按各自 SKILL.md 执行。视频转写由 **`video-note`** 统一负责（抖音路线B页面取流 + B站公开 playurl + 本地文件，SenseVoice GPU+VAD 转写）；原 douyin-transcribe（豆包云方案、不稳定）已移除。端到端与工具层测试见 `tools/test/`（`run-all.js` 一键跑；`video-note` 依赖真实浏览器，不在自动化测试内）。
+
+## Skill 触发硬规则（不可绕过）
+
+skill 只有"被加载正文"才起作用——光从上面索引表"知道有这个 skill"不算用。以下场景**必须先调 Skill 工具加载对应 SKILL.md 正文，再按它的唯一路径走**，不许凭"我觉得捷径更省"自主绕开：
+
+- **用户发网页链接要抓内容**（总结帖子 / 提取评论 / 采集正文 / 看页面 / "这链接讲啥"）→ **必须**加载 `web-scrape` skill 走，**禁止**直接 WebFetch / WebSearch 捷径。碰到登录墙或 9222 连不上 → 按 skill 第 1 步 `scripts/launch-scrape-chrome.ps1` 起浏览器，**不许退回** WebFetch。
+  - 理由：WebFetch 到不了用户的登录会话、拿不全登录后内容；claude 觉得"WebFetch 更省"是省自己、亏用户。实测翻车（2026-06-27 抓 linux.do，claude 绕开 web-scrape 用 WebFetch，Chrome 没起也没去启动，评论区抓不全）。
+- **视频转写** → `video-note`（已明确，见上）。
+
+一句话：该用 skill 的场景，**先加载 skill 正文，再按唯一路径走**，别自主绕捷径。
