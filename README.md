@@ -13,6 +13,7 @@ PocketAide turns [Claude Code](https://claude.com/claude-code) into an always-on
 - **Feishu chat → Claude Code**: a Feishu long-connection receives messages, a pseudo-terminal (ConPTY) drives interactive `claude`, and the markdown reply goes back to Feishu
 - **Local knowledge graph (kg)**: bge-m3 vectors + SQLite FTS5 full-text + a wikilink relation graph — three-way hybrid retrieval; atomic knowledge notes + confirm-before-write
 - **Task tracking**: one markdown file per task, progress appended, archived when due (only touches completed tasks)
+- **Task panel (desktop)**: a local web UI over the very same markdown files — kanban / Eisenhower matrix / sortable list / by-project / archive / health check, drag to change status or priority, installable as a PWA with an offline read-only snapshot. Edits made in the panel are injected back into the conversation, so they also land in Feishu; parse→serialize is byte-for-byte lossless, so your hand-written notes survive every edit
 - **Scheduled reminders**: registered as Windows scheduled tasks, delivered to Feishu on time, any time zone
 - **Web scraping / Video transcription**: drives a debug Chrome to scrape pages and fetch Douyin / Bilibili / local-video streams; local SenseVoice ASR (GPU) transcribes them to text for the knowledge base (no cloud dependency)
 - **System-tray resident**: auto-start on boot, heartbeat self-heal, full restart on each new conversation

@@ -366,6 +366,170 @@ test('U8 webui 与 CLI 同源: 页面写操作复用 switch.js 的 CMDS', () => 
   assert(/sw\.CMDS\.use\(/.test(webui), 'webui 的切换必须调 CMDS.use，否则会绕过"探活→落盘→重启"三步');
 });
 
+// ===== U9 任务面板：数据层无损 + 写入语义 + 双端联动 =====
+// 这组测试守的是同一件事：面板能改任务文件，而任务文件是用户的真资产。
+// 解析→写回只要有一丁点损耗，第一次拖卡片就会静默吃掉他手写的优先级链、引用块、wikilink。
+// 往返样本：每一条都对应一个真出过的丢失。固定样本 + 本机真实文件双跑——
+// 只验真实文件的话，在 tasks/ 为空的仓库上这条测试会悄悄变成空跑、什么都没守住。
+const PANEL_RT_SAMPLES = {
+  '条目间空行': ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# A', '', '## 当前进度', '- [2026-01-02 03:04] 一。', '', '- [2026-01-03 03:04] 二。', '',
+    '## 下一步计划', '- x', ''],
+  '缩进子条目': ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# B', '', '## 当前进度', '- [2026-01-02 03:04] 一。', '  - 子条目', '    - 孙条目', '',
+    '## 下一步计划', '- x', ''],
+  'frontmatter 非规范键序': ['---', 'created: 2026-01-02 03:04', 'horizon: 短期', 'type: task',
+    'status: blocked', '---', '', '# C', '', '## 当前进度', '- [2026-01-02 03:04] 一。', '',
+    '## 下一步计划', '- x', ''],
+  '正文引用块与 wikilink': ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# D', '', '> **优先级链：** A → [[别的任务]] → B', '', '## 当前进度',
+    '- [2026-01-02 03:04] 一。', '', '## 下一步计划', '- x', ''],
+  '无下一步计划段': ['---', 'type: task', 'status: done', 'created: 2026-01-02 03:04',
+    'completed: 2026-01-09 10:11', '---', '', '# E', '', '## 当前进度', '- [2026-01-02 03:04] 一。', ''],
+  '结尾无换行': ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# F', '', '## 当前进度', '- [2026-01-02 03:04] 一。', '', '## 下一步计划', '- x'],
+};
+
+test('U9 面板数据层: 读写往返无损(样本 + 本机全部真实任务文件)', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  for (const [label, lines] of Object.entries(PANEL_RT_SAMPLES)) {
+    const src = lines.join('\n');
+    assert(T.serialize(T.parse(src, 'x')) === src, `样本「${label}」往返有损`);
+  }
+  const bad = [];
+  let n = 0;
+  for (const dir of [T.ACTIVE, T.ARCHIVE]) {
+    let files = [];
+    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch (_) { continue; }
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8');
+      n++;
+      if (T.serialize(T.parse(src, f.replace(/\.md$/, ''))) !== src) bad.push(f);
+    }
+  }
+  assert(bad.length === 0, `${bad.length}/${n} 个真实文件往返有损: ` + bad.slice(0, 3).join(', '));
+  console.log(`        (${Object.keys(PANEL_RT_SAMPLES).length} 个样本 + ${n} 个真实任务文件全部无损)`);
+});
+
+test('U9 面板数据层: 结构化编辑不碰无关内容, 且保持 frontmatter 原键序', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  // 刻意构造一份"有手写内容"的任务: 引用块 + wikilink + 缩进子条目 + 条目间空行
+  const src = [
+    '---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', 'horizon: 短期', '---', '',
+    '# 某任务', '',
+    '> **优先级链：** A → [[别的任务]] → B', '',
+    '## 当前进度',
+    '- [2026-01-02 03:04] 登记。',
+    '  - 子条目要保住',
+    '',
+    '- [2026-01-03 05:06] 又做了点。', '',
+    '## 下一步计划', '- 继续', '',
+  ].join('\n');
+  const t = T.parse(src, '某任务');
+  assert(T.serialize(t) === src, '构造样本自身往返就有损');
+  assert(t.progress.items.length === 2, '缩进子条目被误当成独立进度条目: ' + t.progress.items.length);
+
+  T.setFields(t, { priority: '高' });
+  const out = T.serialize(t);
+  assert(out.includes('> **优先级链：** A → [[别的任务]] → B'), '手写引用块被吃掉了');
+  assert(out.includes('  - 子条目要保住'), '缩进子条目被吃掉了');
+  // 新字段必须追加在原有键之后, 不能重排 —— 重排会让 git diff 显示成整块改动
+  const fmLines = out.split('\n').slice(1, 7);
+  assert(fmLines[2].startsWith('created:'), 'frontmatter 原键序被打乱: ' + JSON.stringify(fmLines));
+  assert(out.includes('priority: 高'), '新字段没写进去');
+});
+
+test('U9 面板写入: 改状态必须自动留痕(不能绕过进度流)', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  const src = ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# X', '', '## 当前进度', '- [2026-01-02 03:04] 登记。', '', '## 下一步计划', '- a', ''].join('\n');
+  const t = T.parse(src, 'X');
+  const before = t.progress.items.length;
+  T.setFields(t, { status: 'done' }, new Date('2026-05-06T07:08:00'));
+  assert(t.progress.items.length === before + 1,
+    '改状态没有自动补进度: 任务会"状态变了但没人知道为什么变", 而进度流正是这个任务库最值钱的部分');
+  assert(t.fm.completed, '标记 done 时没有写 completed 时间');
+  T.setFields(t, { status: 'running' });
+  assert(!t.fm.completed, '从 done 改回去时 completed 没有清掉, 会留下假的完成时间');
+});
+
+test('U9 面板体检: 停滞天数 / 重复检测 既不漏报也不误报', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  // 造一批任务喂给体检: 两条是真重复, 两条只是共享一个 2-gram、绝不能被凑成一组。
+  // 重复检测宁可漏报不可误报——误报一次, 人就不信这个提示了, 之后连真的重复也一起忽略。
+  const mk = (title, last) => {
+    const t = T.parse(['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+      '# ' + title, '', '## 当前进度', `- [${last}] 一。`, '', '## 下一步计划', '- x', ''].join('\n'), title);
+    t.bucket = 'active';
+    return t;
+  };
+  const now = new Date('2026-04-01T12:00:00');
+  const h = T.healthCheck([
+    mk('整理电脑上的 GitHub 项目', '2026-01-02 03:04'),   // 停滞 89 天
+    mk('整理 GitHub 项目', '2026-03-30 03:04'),           // 与上一条重复
+    mk('优化个人简历', '2026-03-30 03:04'),               // 与下一条只共享「个人」
+    mk('整理个人主页', '2026-03-30 03:04'),
+  ], now);
+  assert(h.counts.total === 4, '体检计数不对: ' + h.counts.total);
+  assert(Array.isArray(h.stale) && Array.isArray(h.duplicates), '体检结构不对');
+  assert(h.stale.length === 1 && h.stale[0].days === 89, '停滞识别不对: ' + JSON.stringify(h.stale));
+  const grouped = (a, b) => h.duplicates.some((g) =>
+    g.some((x) => x.title === a) && g.some((x) => x.title === b));
+  assert(grouped('整理电脑上的 GitHub 项目', '整理 GitHub 项目'), '真重复没被认出来');
+  assert(!grouped('优化个人简历', '整理个人主页'), '只共享「个人」这个 2-gram 的两条被误判成重复');
+
+  // 本机有真实任务时顺带体检一遍: 结构不能崩, 组里不能出现同一个任务两次
+  const real = T.healthCheck(T.loadAll());
+  for (const g of real.duplicates) {
+    assert(g.length > 1, '重复组里只有一个任务');
+    const titles = g.map((x) => x.title);
+    assert(new Set(titles).size === titles.length, '重复组里出现了同一个任务两次');
+  }
+});
+
+test('U9 面板服务: 无 token 403 / 路径穿越被拒 / 静态资源免鉴权', () => {
+  const srv = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'server.js'), 'utf8');
+  assert(/127\.0\.0\.1/.test(srv) && !/server\.listen\(\s*PORT\s*\)/.test(srv),
+    '面板服务必须显式绑 127.0.0.1, 否则局域网可直接读到你的全部任务');
+  assert(/timingSafeEqual/.test(srv), 'token 比较必须用时间安全比较');
+  assert(/includes\('\.\.'\)/.test(srv), '任务名没有做路径穿越校验');
+  assert(/authed\(req, url\)/.test(srv), 'API 未统一鉴权');
+  // SW 与 manifest 必须免鉴权, 否则 PWA 根本装不上(浏览器发的是不带 cookie 的请求)
+  const i = srv.indexOf('STATIC[url.pathname]'), j = srv.indexOf("url.pathname.startsWith('/api/')");
+  assert(i > 0 && j > i, '静态资源放行必须在 API 鉴权之前');
+});
+
+test('U9 双端联动: 面板改动会投递事件, 提示词只许播报不许动手', () => {
+  const EV = require(path.join(REPO, 'tools', 'panel', 'events.js'));
+  const p = EV.buildPrompt([
+    { kind: 'status', title: 'T1', from: 'running', to: 'done', at: new Date().toISOString() },
+    { kind: 'progress', title: 'T2', text: '做了点事', at: new Date().toISOString() },
+  ]);
+  assert(/T1/.test(p) && /T2/.test(p), '提示词没带上改动内容');
+  // 约束必须在: 否则 claude 看到"某任务 done"会顺手去归档、去改别的文件——
+  // 用户在面板点一下, 不该触发一串他没要求的动作
+  assert(/不要执行任何后续动作|只播报/.test(p), '提示词缺少"只播报不动手"的硬约束');
+  assert(/不要调用工具/.test(p) && /不要改任何文件/.test(p), '提示词缺少禁止工具/写文件的约束');
+  // 攒批: 连拖三张卡片不该炸出三轮对话
+  const fresh = [{ at: new Date().toISOString() }];
+  assert(EV.isReady(fresh) === false, '刚发生的改动就该等一等, 不能立刻打扰');
+  assert(EV.isReady([{ at: new Date(Date.now() - 60000).toISOString() }]) === true, '静默够久后必须发出');
+  // 桥接侧真的接了这条线
+  const main = fs.readFileSync(path.join(REPO, 'bridge', 'main.js'), 'utf8');
+  assert(/panel\/events/.test(main) && /drainPanelEvents/.test(main), 'bridge/main.js 没有接面板事件');
+  assert(/panelEvents\.clear\(evts\)/.test(main), '事件没有在处理后清除, 会无限重播同一批');
+});
+
+test('U9 离线: SW 缓存只读快照, 写操作绝不排队重放', () => {
+  const sw = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'sw.js'), 'utf8');
+  assert(/api\/state/.test(sw) && /caches/.test(sw), 'SW 没有做数据快照');
+  // 离线补写是危险的: 你在飞书那头可能已经改过同一个任务, 等服务回来再灌旧指令就是静默覆盖
+  assert(!/background-?sync|SyncManager|replay/i.test(sw), 'SW 不许把写操作排队重放');
+  assert(/offline\s*=\s*true/.test(sw), '回放快照时必须打 offline 标记, 页面才能转只读');
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  assert(/S\.offline/.test(html) && /只读|改不了/.test(html), '页面没有根据 offline 标记转只读');
+});
+
 // ---- 收尾 ----
 rmrfDir(TMP);
 

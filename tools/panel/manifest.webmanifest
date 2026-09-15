@@ -1,0 +1,14 @@
+{
+  "name": "任务面板",
+  "short_name": "任务",
+  "description": "个人AI参谋系统 · 任务看板 / 四象限 / 进度时间线",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#faf9f5",
+  "theme_color": "#faf9f5",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

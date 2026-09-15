@@ -75,3 +75,11 @@ venv/
 
 # ASR 模型文件（SenseVoice + VAD 等，GB 级，从 hf-mirror/modelscope 下到本地，不入库）
 models/
+
+# 任务面板：持久访问令牌 + 待播报的变更事件（都是运行时产物，不入库）
+tools/panel/.token
+workspace/.inbox/
+
+# 每周任务体检推送的运行期文件（runner 由 register-panel-weekly.ps1 生成、log 持续追加）
+tasks/reminders/.panel-weekly-runner.ps1
+tasks/reminders/panel-weekly.log

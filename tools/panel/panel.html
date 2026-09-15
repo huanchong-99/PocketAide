@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#faf9f5">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<title>任务面板</title>
+<style>
+  /* ────────────────────────────────────────────────────────────────
+     配色 = Anthropic 官网色板。上面一组是从 anthropic.com 的
+     `--swatch--*` CSS 变量里原样取下来的品牌色，不是凭印象调的；
+     下面一组是把它们映射成本面板的语义色。
+     语义色里的 ok/warn/bad 用的是品牌色压暗后的版本（olive / kraft /
+     fig），因为品牌原值是给大色块用的，直接当正文色放在象牙白底上
+     对比度只有 2~3:1，看不清。压暗后都 ≥4.5:1。
+     ──────────────────────────────────────────────────────────────── */
+  :root{
+    --ivory-light:#faf9f5; --ivory-med:#f0eee6; --ivory-dark:#e8e6dc;
+    --slate-dark:#141413;  --slate-med:#3d3d3a;  --slate-light:#5e5d59;
+    --cloud-light:#d1cfc5; --cloud-med:#b0aea5;  --cloud-dark:#87867f;
+    --clay:#d97757; --accent:#c6613f; --oat:#e3dacc; --olive:#788c5d;
+    --kraft:#d4a27f; --fig:#c46686; --heather:#cbcadb; --cactus:#bcd1ca;
+
+    --bg:var(--ivory-light); --card:#fff; --card2:var(--ivory-med);
+    --line:#1414131a; --line2:#14141333;            /* slate-faded 10 / 20 */
+    --fg:var(--slate-dark); --dim:var(--slate-light); --dim2:var(--cloud-dark);
+    --acc:var(--clay); --acc-ink:#a94f2c;
+    --ok:#647a4c;   --ok-bg:#edf1e7;   --ok-line:#c3cfb1;
+    --warn:#8a5a2f; --warn-bg:#f8efe3; --warn-line:#e0c0a0;
+    --bad:#a8415f;  --bad-bg:#faedf1;  --bad-line:#e4aec0;
+    --purple:#605e8c; --purple-bg:#f1f1f7; --purple-line:#c6c5d9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1500px;margin:0 auto;padding:20px 22px 60px}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:12.5px}
+  a{color:var(--acc-ink);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0}
+  .tabs{display:flex;gap:2px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:3px}
+  .tab{padding:6px 14px;border-radius:8px;cursor:pointer;color:var(--dim);font-size:13px;white-space:nowrap;border:0;background:none;font-family:inherit}
+  .tab:hover{color:var(--fg)}
+  .tab.on{background:var(--slate-dark);color:var(--ivory-light)}
+  .grow{flex:1}
+  input,select,textarea,button{font-family:inherit;font-size:13px}
+  input,select,textarea{background:var(--card);border:1px solid var(--line2);color:var(--fg);border-radius:8px;padding:7px 10px}
+  input::placeholder{color:var(--dim2)}
+  input:focus,select:focus,textarea:focus{outline:2px solid #d9775766;outline-offset:-1px;border-color:var(--acc)}
+  button{background:var(--card);border:1px solid var(--line2);color:var(--fg);border-radius:8px;padding:7px 13px;cursor:pointer}
+  button:hover{border-color:var(--slate-dark)}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  button.primary:hover{background:var(--accent);border-color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+
+  .banner{border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;border:1px solid}
+  .b-warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
+  .b-bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+  .b-ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+
+  /* 看板 */
+  /* minmax(0,1fr) 而不是 1fr：1fr 的下限是 auto（= 内容最小宽度），卡片里那条
+     white-space:nowrap 的「下一步」会把第一列撑到 566px，把第四列挤出屏幕。 */
+  .cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:start}
+  .col{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:120px}
+  .col.drag{border-color:var(--acc);background:var(--ivory-dark)}
+  .col h3{margin:2px 0 10px;font-size:13px;display:flex;justify-content:space-between;color:var(--dim);font-weight:600}
+  .col h3 b{color:var(--fg)}
+
+  /* 卡片 */
+  .card{background:var(--card);border:1px solid var(--line);border-left-width:3px;border-radius:9px;
+        padding:9px 11px;margin-bottom:8px;cursor:pointer;min-width:0;transition:border-color .12s}
+  .card .t{overflow-wrap:anywhere}
+  .card:hover{border-color:var(--acc)}
+  .card.p高{border-left-color:var(--accent)} .card.p中{border-left-color:var(--kraft)} .card.p低{border-left-color:var(--cloud-light)}
+  .card .t{font-size:13px;line-height:1.45;margin-bottom:6px}
+  .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--dim)}
+  .chip{background:var(--card);border:1px solid var(--line2);border-radius:999px;padding:1px 7px;color:var(--dim)}
+  .chip.stale{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
+  .chip.stale.hot{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+  .chip.due{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+  .chip.due.over{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+  .chip.proj{background:var(--purple-bg);border-color:var(--purple-line);color:var(--purple)}
+  .next{color:var(--dim);font-size:11.5px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* 四象限 */
+  .quad{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .qbox{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px;min-height:140px}
+  .qbox.drag{border-color:var(--acc);background:var(--ivory-dark)}
+  .qbox h3{margin:0 0 4px;font-size:13px}
+  .qhint{color:var(--dim);font-size:11.5px;margin-bottom:9px}
+
+  /* 列表 */
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:12.5px}
+  th{background:var(--card2);color:var(--dim);font-weight:600;cursor:pointer;user-select:none;white-space:nowrap}
+  th:hover{color:var(--fg)}
+  tr:last-child td{border-bottom:0}
+  tbody tr{cursor:pointer} tbody tr:hover{background:var(--ivory-light)}
+
+  /* 分组 */
+  .grp{margin-bottom:18px}
+  .grp>h3{font-size:13px;margin:0 0 8px;color:var(--dim);display:flex;gap:8px;align-items:center}
+  .grp .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:9px}
+
+  /* 抽屉 */
+  .mask{position:fixed;inset:0;background:#14141359;display:none;z-index:40}
+  .mask.on{display:block}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);background:var(--card);
+          border-left:1px solid var(--line2);box-shadow:-16px 0 48px #14141314;
+          z-index:41;transform:translateX(100%);transition:transform .16s;
+          display:flex;flex-direction:column}
+  .drawer.on{transform:none}
+  .dhead{padding:16px 18px;border-bottom:1px solid var(--line);background:var(--card2)}
+  .dbody{padding:16px 18px;overflow:auto;flex:1}
+  .dfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;background:var(--card2)}
+  .fields{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;margin-bottom:18px}
+  .fields label{color:var(--dim);font-size:12.5px}
+
+  /* 时间线 */
+  .tl{border-left:2px solid var(--oat);margin-left:6px;padding-left:16px}
+  .tl .ev{position:relative;padding-bottom:14px}
+  .tl .ev::before{content:'';position:absolute;left:-22px;top:6px;width:8px;height:8px;border-radius:50%;
+                  background:var(--cloud-med);border:2px solid var(--card)}
+  .tl .ev:last-child::before{background:var(--acc)}
+  .tl .when{color:var(--dim2);font-size:11.5px}
+  .tl .what{font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+
+  .sec{margin:22px 0 10px;font-size:14px;font-weight:600;display:flex;align-items:center;gap:9px}
+  .sec .sub{font-weight:400}
+  .empty{color:var(--dim2);font-size:12.5px;padding:14px;text-align:center}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--slate-dark);
+         border:1px solid var(--slate-dark);color:var(--ivory-light);box-shadow:0 8px 24px #14141426;
+         border-radius:9px;padding:9px 16px;font-size:13px;z-index:50;display:none}
+  .toast.on{display:block}
+  .toast.bad{background:#8f2f4c;border-color:#8f2f4c;color:#fff}
+  .ro .card,.ro tbody tr{cursor:default}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <h1>任务面板</h1>
+  <div class="sub" id="sub">加载中…</div>
+
+  <div id="banners"></div>
+
+  <div class="bar">
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-v="board">看板</button>
+      <button class="tab" data-v="quad">四象限</button>
+      <button class="tab" data-v="list">列表</button>
+      <button class="tab" data-v="group">分组</button>
+      <button class="tab" data-v="archive">归档</button>
+      <button class="tab" data-v="health">体检</button>
+    </div>
+    <input id="q" placeholder="搜索标题 / 项目…" style="width:190px">
+    <select id="fh"><option value="">全部周期</option></select>
+    <select id="fp"><option value="">全部项目</option></select>
+    <select id="fpri"><option value="">全部优先级</option></select>
+    <span class="grow"></span>
+    <button id="btnNew" class="primary">+ 新建任务</button>
+    <button id="btnReload">刷新</button>
+  </div>
+
+  <div id="view"></div>
+</div>
+
+<div class="mask" id="mask"></div>
+<div class="drawer" id="drawer">
+  <div class="dhead">
+    <div style="font-size:15px;font-weight:600" id="dTitle"></div>
+    <div class="sub" id="dSub"></div>
+  </div>
+  <div class="dbody" id="dBody"></div>
+  <div class="dfoot">
+    <input id="dProg" placeholder="补一条进度…" style="flex:1">
+    <button id="dAdd" class="primary">追加</button>
+    <button id="dClose">关闭</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const ST_CN = { running: '进行中', blocked: '阻塞', done: '已完成', cancelled: '已取消' };
+const ST_ORDER = ['running', 'blocked', 'done', 'cancelled'];
+const closed = (t) => t.status === 'done' || t.status === 'cancelled';
+
+let S = { tasks: [], health: null, meta: {}, offline: false };
+let view = 'board';
+let cur = null;               // 抽屉里打开的任务
+let sortKey = 'staleDays', sortDir = -1;
+
+// ---------------------------------------------------------------- 通信
+
+async function api(name, body) {
+  const r = await fetch('/api/' + name, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || '请求失败');
+  return j.data;
+}
+
+function toast(msg, bad) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast on' + (bad ? ' bad' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = 'toast'; }, bad ? 5200 : 2600);
+}
+
+async function reload() {
+  try {
+    S = await api('state');
+    // 离线时页面转只读：SW 回放的是快照，这时候放任写操作会让人以为改成功了
+    document.getElementById('wrap').classList.toggle('ro', !!S.offline);
+    fillFilters();
+    render();
+  } catch (e) { toast('加载失败：' + e.message, true); }
+}
+
+// ---------------------------------------------------------------- 过滤
+
+function fillFilters() {
+  const keep = (sel, arr, ph) => {
+    const v = sel.value;
+    sel.innerHTML = '<option value="">' + ph + '</option>' +
+      arr.map((x) => '<option' + (x === v ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
+  };
+  keep($('fh'), S.meta.horizons || [], '全部周期');
+  keep($('fp'), S.meta.projects || [], '全部项目');
+  keep($('fpri'), S.meta.priorities || [], '全部优先级');
+}
+
+function visible(bucket) {
+  const q = $('q').value.trim().toLowerCase();
+  const h = $('fh').value, p = $('fp').value, pri = $('fpri').value;
+  return S.tasks.filter((t) =>
+    t.bucket === bucket &&
+    (!q || (t.title + ' ' + t.name + ' ' + (t.project || '')).toLowerCase().includes(q)) &&
+    (!h || t.horizon === h) && (!p || t.project === p) && (!pri || t.priority === pri));
+}
+
+// ---------------------------------------------------------------- 卡片
+
+function chips(t) {
+  const c = [];
+  if (t.staleDays != null && t.staleDays >= 7 && !closed(t)) {
+    const hot = t.staleDays >= (S.meta.staleThreshold || 30);
+    c.push('<span class="chip stale' + (hot ? ' hot' : '') + '">停滞 ' + t.staleDays + ' 天</span>');
+  }
+  if (t.daysLeft != null && !closed(t)) {
+    c.push('<span class="chip due' + (t.daysLeft < 0 ? ' over' : '') + '">' +
+      (t.daysLeft < 0 ? '逾期 ' + (-t.daysLeft) + ' 天' : t.daysLeft === 0 ? '今天截止' : '剩 ' + t.daysLeft + ' 天') + '</span>');
+  }
+  if (t.project) c.push('<span class="chip proj">' + esc(t.project) + '</span>');
+  if (t.horizon) c.push('<span class="chip">' + esc(t.horizon) + '</span>');
+  if (t.priority) c.push('<span class="chip">' + esc(t.priority) + '</span>');
+  if (t.progressCount) c.push('<span class="chip">' + t.progressCount + ' 条进度</span>');
+  return c.join('');
+}
+
+const cardHtml = (t) =>
+  '<div class="card' + (t.priority ? ' p' + t.priority : '') + '" draggable="' + (S.offline ? 'false' : 'true') +
+  '" data-name="' + esc(t.name) + '" data-bucket="' + esc(t.bucket) + '">' +
+    '<div class="t">' + esc(t.title) + '</div>' +
+    '<div class="meta">' + chips(t) + '</div>' +
+    (t.nextFirst ? '<div class="next">→ ' + esc(t.nextFirst) + '</div>' : '') +
+  '</div>';
+
+// ---------------------------------------------------------------- 各视图
+
+function render() {
+  $('sub').innerHTML = subLine();
+  $('banners').innerHTML = banners();
+  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.v === view));
+  const v = $('view');
+  if (view === 'board') v.innerHTML = renderBoard();
+  else if (view === 'quad') v.innerHTML = renderQuad();
+  else if (view === 'list') v.innerHTML = renderList('active');
+  else if (view === 'group') v.innerHTML = renderGroup();
+  else if (view === 'archive') v.innerHTML = renderList('archive');
+  else v.innerHTML = renderHealth();
+  wire();
+}
+
+function subLine() {
+  const c = (S.health && S.health.counts) || {};
+  const bits = ['共 <b>' + (c.total || 0) + '</b> 个活跃任务'];
+  for (const s of ST_ORDER) if (c[s]) bits.push(ST_CN[s] + ' ' + c[s]);
+  if (S.offline) bits.push('<span style="color:var(--warn)">离线快照（只读）</span>');
+  return bits.join(' · ');
+}
+
+function banners() {
+  if (!S.health) return '';
+  const h = S.health, out = [];
+  if (S.offline) {
+    out.push('<div class="banner b-warn">⚠ 面板服务没在运行，正在显示<b>离线快照</b>' +
+      (S.snapshotAt ? '（' + esc(String(S.snapshotAt).slice(0, 16).replace('T', ' ')) + '）' : '') +
+      '。可以查看，但改不了——从托盘启动面板后刷新即可。</div>');
+  }
+  if (h.overdue && h.overdue.length) {
+    out.push('<div class="banner b-bad">⛔ <b>' + h.overdue.length + '</b> 个任务已逾期：' +
+      h.overdue.slice(0, 3).map((x) => esc(x.title) + '（' + (-x.left) + ' 天）').join('、') + '</div>');
+  }
+  if (h.stale && h.stale.length) {
+    out.push('<div class="banner b-warn">⏳ <b>' + h.stale.length + '</b> 个进行中的任务停滞超过 ' +
+      h.staleThreshold + ' 天，最久 <b>' + h.stale[0].days + ' 天</b>：' + esc(h.stale[0].title) + '</div>');
+  }
+  if (h.duplicates && h.duplicates.length) {
+    out.push('<div class="banner b-warn">🔁 发现 <b>' + h.duplicates.length + '</b> 组疑似重复：' +
+      h.duplicates.map((g) => g.map((x) => esc(x.title)).join(' × ')).join('；') + '</div>');
+  }
+  return out.join('');
+}
+
+function renderBoard() {
+  const ts = visible('active');
+  return '<div class="cols">' + ST_ORDER.map((s) => {
+    const list = ts.filter((t) => t.status === s)
+      .sort((a, b) => (b.staleDays || 0) - (a.staleDays || 0));
+    return '<div class="col" data-status="' + s + '"><h3><b>' + ST_CN[s] + '</b><span>' + list.length + '</span></h3>' +
+      (list.length ? list.map(cardHtml).join('') : '<div class="empty">空</div>') + '</div>';
+  }).join('') + '</div>';
+}
+
+const QUAD = [
+  { k: 'a', t: '重要 且 紧急', h: '马上做', pri: '高', urgent: true },
+  { k: 'b', t: '重要 不紧急', h: '安排时间做', pri: '高', urgent: false },
+  { k: 'c', t: '不重要 但紧急', h: '尽快处理掉', pri: '低', urgent: true },
+  { k: 'd', t: '不重要 不紧急', h: '有空再说', pri: '低', urgent: false },
+];
+
+/** 紧急 = 有截止日且剩余 ≤7 天（含逾期）。客观算出来的，不用你手工打标。 */
+const isUrgent = (t) => t.daysLeft != null && t.daysLeft <= 7;
+
+function renderQuad() {
+  const ts = visible('active').filter((t) => t.status === 'running' || t.status === 'blocked');
+  const un = ts.filter((t) => !t.priority);
+  const box = (q) => {
+    const list = ts.filter((t) => t.priority && (q.pri === '高' ? t.priority === '高' : t.priority !== '高') &&
+      isUrgent(t) === q.urgent);
+    return '<div class="qbox" data-quad="' + q.k + '"><h3>' + q.t + '</h3><div class="qhint">' + q.h +
+      ' · ' + list.length + ' 个</div>' +
+      (list.length ? list.map(cardHtml).join('') : '<div class="empty">空</div>') + '</div>';
+  };
+  return '<div class="quad">' + QUAD.map(box).join('') + '</div>' +
+    (un.length ? '<div class="sec">未分类 <span class="sub">（' + un.length +
+      ' 个还没设优先级；拖进上面任一象限即可，紧急与否按截止日自动算）</span></div>' +
+      '<div class="grp"><div class="cards">' + un.map(cardHtml).join('') + '</div></div>' : '');
+}
+
+const COLS = [
+  ['title', '任务'], ['status', '状态'], ['project', '项目'], ['horizon', '周期'],
+  ['priority', '优先级'], ['staleDays', '停滞'], ['daysLeft', '截止'], ['progressCount', '进度'],
+];
+
+function renderList(bucket) {
+  const ts = visible(bucket).slice().sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'zh')) * sortDir;
+  });
+  if (!ts.length) return '<div class="empty">没有符合条件的任务</div>';
+  return '<table><thead><tr>' +
+    COLS.map(([k, n]) => '<th data-k="' + k + '">' + n + (sortKey === k ? (sortDir > 0 ? ' ↑' : ' ↓') : '') + '</th>').join('') +
+    '</tr></thead><tbody>' + ts.map((t) =>
+      '<tr data-name="' + esc(t.name) + '" data-bucket="' + esc(t.bucket) + '">' +
+      '<td>' + esc(t.title) + '</td>' +
+      '<td>' + (ST_CN[t.status] || esc(t.status)) + '</td>' +
+      '<td>' + esc(t.project || '—') + '</td>' +
+      '<td>' + esc(t.horizon || '—') + '</td>' +
+      '<td>' + esc(t.priority || '—') + '</td>' +
+      // 已完成/已取消的任务显示"停滞 92 天"没有意义——它不是搁置，是结束了
+      '<td>' + (t.staleDays == null || closed(t) ? '—' : t.staleDays + ' 天') + '</td>' +
+      '<td>' + (t.daysLeft == null || closed(t) ? '—' : (t.daysLeft < 0 ? '逾期 ' + (-t.daysLeft) : '剩 ' + t.daysLeft) + ' 天') + '</td>' +
+      '<td>' + t.progressCount + '</td></tr>').join('') + '</tbody></table>';
+}
+
+function renderGroup() {
+  const ts = visible('active');
+  const by = new Map();
+  for (const t of ts) {
+    const k = t.project || '（未分项目）';
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(t);
+  }
+  const keys = [...by.keys()].sort((a, b) => (a.startsWith('（') ? 1 : b.startsWith('（') ? -1 : a.localeCompare(b, 'zh')));
+  if (!keys.length) return '<div class="empty">没有符合条件的任务</div>';
+  return keys.map((k) => {
+    const list = by.get(k);
+    const done = list.filter((t) => t.status === 'done').length;
+    return '<div class="grp"><h3>' + esc(k) +
+      ' <span class="chip">' + list.length + ' 个</span>' +
+      ' <span class="chip">完成 ' + done + '/' + list.length + '</span></h3>' +
+      '<div class="cards">' + list.map(cardHtml).join('') + '</div></div>';
+  }).join('');
+}
+
+function renderHealth() {
+  const h = S.health;
+  if (!h) return '<div class="empty">无数据</div>';
+  const sec = (title, rows, empty) =>
+    '<div class="sec">' + title + '</div>' +
+    (rows.length ? '<table><tbody>' + rows.join('') + '</tbody></table>' : '<div class="empty">' + empty + '</div>');
+  return sec('⏳ 停滞超过 ' + h.staleThreshold + ' 天（进行中）',
+      h.stale.map((x) => '<tr data-name="' + esc(x.name) + '" data-bucket="active"><td>' + esc(x.title) +
+        '</td><td style="text-align:right;color:var(--warn)">' + x.days + ' 天</td></tr>'), '没有停滞任务') +
+    sec('⛔ 已逾期',
+      h.overdue.map((x) => '<tr data-name="' + esc(x.name) + '" data-bucket="active"><td>' + esc(x.title) +
+        '</td><td style="text-align:right;color:var(--bad)">逾期 ' + (-x.left) + ' 天</td></tr>'), '没有逾期任务') +
+    sec('📅 7 天内到期',
+      h.dueSoon.map((x) => '<tr data-name="' + esc(x.name) + '" data-bucket="active"><td>' + esc(x.title) +
+        '</td><td style="text-align:right;color:var(--ok)">' + (x.left === 0 ? '今天' : '剩 ' + x.left + ' 天') + '</td></tr>'), '近 7 天没有到期任务') +
+    sec('🔁 疑似重复',
+      h.duplicates.map((g) => '<tr><td colspan="2">' + g.map((x) =>
+        '<a href="#" data-name="' + esc(x.name) + '" data-bucket="active">' + esc(x.title) + '</a>').join('　×　') + '</td></tr>'), '没有发现重复');
+}
+
+// ---------------------------------------------------------------- 抽屉
+
+async function open(name, bucket) {
+  try {
+    cur = await api('detail', { name, bucket });
+    $('dTitle').textContent = cur.title;
+    $('dSub').textContent = (ST_CN[cur.status] || cur.status) + ' · 建于 ' + (cur.created || '—') +
+      (cur.staleDays != null ? ' · 停滞 ' + cur.staleDays + ' 天' : '');
+    $('dBody').innerHTML = drawerBody(cur);
+    $('mask').classList.add('on');
+    $('drawer').classList.add('on');
+    wireDrawer();
+  } catch (e) { toast('打开失败：' + e.message, true); }
+}
+
+function closeDrawer() {
+  $('mask').classList.remove('on');
+  $('drawer').classList.remove('on');
+  cur = null;
+}
+
+function drawerBody(t) {
+  const ro = S.offline ? ' disabled' : '';
+  const sel = (id, opts, val, ph) => '<select id="' + id + '"' + ro + '><option value="">' + ph + '</option>' +
+    opts.map((o) => '<option' + (o === val ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select>';
+  return '<div class="fields">' +
+      '<label>状态</label>' + '<select id="fStatus"' + ro + '>' + ST_ORDER.map((s) =>
+        '<option value="' + s + '"' + (s === t.status ? ' selected' : '') + '>' + ST_CN[s] + '</option>').join('') + '</select>' +
+      '<label>周期</label>' + sel('fHorizon', S.meta.horizons || [], t.horizon, '（未设）') +
+      '<label>优先级</label>' + sel('fPriority', S.meta.priorities || [], t.priority, '（未设）') +
+      '<label>项目</label>' + '<input id="fProject" value="' + esc(t.project) + '" placeholder="（未设）"' + ro + '>' +
+      '<label>截止日</label>' + '<input id="fDeadline" type="date" value="' + esc(t.deadline ? t.deadline.slice(0, 10) : '') + '"' + ro + '>' +
+    '</div>' +
+    (S.offline ? '' : '<button id="fSave" class="primary">保存字段</button>') +
+    (t.intro ? '<div class="sec">说明</div><div class="what" style="white-space:pre-wrap;font-size:12.5px;color:var(--dim)">' + esc(t.intro) + '</div>' : '') +
+    '<div class="sec">当前进度 <span class="sub">（' + t.progress.length + ' 条）</span></div>' +
+    (t.progress.length
+      ? '<div class="tl">' + t.progress.map((p) =>
+          '<div class="ev"><div class="when">' + esc(p.date + ' ' + p.time) + '</div>' +
+          '<div class="what">' + esc(p.text) + '</div></div>').join('') + '</div>'
+      : '<div class="empty">还没有进度记录</div>') +
+    '<div class="sec">下一步计划</div>' +
+    (t.next.length ? '<ul style="margin:0;padding-left:20px">' + t.next.map((n) =>
+      '<li style="font-size:12.5px;white-space:pre-wrap">' + esc(n) + '</li>').join('') + '</ul>'
+      : '<div class="empty">没有计划条目</div>') +
+    (t.links && t.links.length
+      ? '<div class="sec">关联任务</div><div class="meta">' + t.links.map((l) =>
+          '<a href="#" class="chip" data-name="' + esc(l) + '" data-bucket="active">' + esc(l) + '</a>').join('') + '</div>'
+      : '');
+}
+
+// ---------------------------------------------------------------- 写操作
+
+async function patch(name, bucket, p, label) {
+  if (S.offline) return toast('离线快照，改不了', true);
+  try {
+    const r = await api('setFields', { name, bucket, patch: p });
+    if (!r.changed.length) return toast('没有变化');
+    toast(label || '已保存');
+    await reload();
+    if (cur && cur.name === name) await open(name, bucket);
+  } catch (e) { toast('保存失败：' + e.message, true); }
+}
+
+// ---------------------------------------------------------------- 事件绑定
+
+function wire() {
+  // 卡片 / 表格行 → 打开抽屉
+  document.querySelectorAll('#view .card, #view tbody tr, #view a[data-name]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const n = el.dataset.name, b = el.dataset.bucket || 'active';
+      if (n) open(n, b);
+    });
+  });
+  // 表头排序
+  document.querySelectorAll('#view th[data-k]').forEach((th) => {
+    th.addEventListener('click', () => {
+      const k = th.dataset.k;
+      if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'title' ? 1 : -1; }
+      render();
+    });
+  });
+  if (!S.offline) { wireDragBoard(); wireDragQuad(); }
+}
+
+/** 看板拖拽：拖到另一列 = 改状态。 */
+function wireDragBoard() {
+  document.querySelectorAll('#view .card').forEach((c) => {
+    c.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', JSON.stringify({ name: c.dataset.name, bucket: c.dataset.bucket }));
+    });
+  });
+  document.querySelectorAll('#view .col').forEach((col) => {
+    col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag'); });
+    col.addEventListener('dragleave', () => col.classList.remove('drag'));
+    col.addEventListener('drop', (e) => {
+      e.preventDefault(); col.classList.remove('drag');
+      const d = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
+      if (d.name) patch(d.name, d.bucket, { status: col.dataset.status }, '已改为「' + ST_CN[col.dataset.status] + '」');
+    });
+  });
+}
+
+/** 四象限拖拽：只设优先级。紧急与否由截止日客观算出，不靠拖。 */
+function wireDragQuad() {
+  document.querySelectorAll('#view .qbox').forEach((box) => {
+    box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('drag'); });
+    box.addEventListener('dragleave', () => box.classList.remove('drag'));
+    box.addEventListener('drop', (e) => {
+      e.preventDefault(); box.classList.remove('drag');
+      const d = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
+      const q = QUAD.find((x) => x.k === box.dataset.quad);
+      if (!d.name || !q) return;
+      const t = S.tasks.find((x) => x.name === d.name);
+      if (q.urgent && (!t || t.daysLeft == null)) {
+        toast('「紧急」是按截止日自动算的：给它设个 7 天内的截止日就会进这一格', true);
+      }
+      patch(d.name, d.bucket, { priority: q.pri }, '优先级已设为「' + q.pri + '」');
+    });
+  });
+}
+
+function wireDrawer() {
+  const save = $('fSave');
+  if (save) save.onclick = () => patch(cur.name, cur.bucket, {
+    status: $('fStatus').value, horizon: $('fHorizon').value,
+    priority: $('fPriority').value, project: $('fProject').value.trim(),
+    deadline: $('fDeadline').value,
+  }, '字段已保存');
+  document.querySelectorAll('#dBody a[data-name]').forEach((a) => {
+    a.addEventListener('click', (e) => { e.preventDefault(); open(a.dataset.name, 'active'); });
+  });
+}
+
+$('dAdd').onclick = async () => {
+  const text = $('dProg').value.trim();
+  if (!cur || !text) return;
+  if (S.offline) return toast('离线快照，改不了', true);
+  try {
+    await api('addProgress', { name: cur.name, bucket: cur.bucket, text });
+    $('dProg').value = '';
+    toast('进度已追加');
+    await reload();
+    await open(cur.name, cur.bucket);
+  } catch (e) { toast('追加失败：' + e.message, true); }
+};
+$('dProg').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('dAdd').click(); });
+$('dClose').onclick = closeDrawer;
+$('mask').onclick = closeDrawer;
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+
+$('btnNew').onclick = async () => {
+  if (S.offline) return toast('离线快照，建不了', true);
+  const title = prompt('新任务标题：');
+  if (!title || !title.trim()) return;
+  try {
+    const r = await api('create', { name: title.trim(), title: title.trim() });
+    toast('已建「' + r.task.title + '」');
+    await reload();
+    open(r.task.name, 'active');
+  } catch (e) { toast('创建失败：' + e.message, true); }
+};
+
+$('btnReload').onclick = reload;
+document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => { view = b.dataset.v; render(); }));
+['q', 'fh', 'fp', 'fpri'].forEach((id) => $(id).addEventListener('input', render));
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+reload();
+setInterval(() => { if (!S.offline && !cur) reload(); }, 60000);
+</script>
+</body>
+</html>

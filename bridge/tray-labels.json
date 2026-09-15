@@ -23,7 +23,10 @@
     "switchFail": "切换到 {0} 失败：{1}",
     "switchPendingTerm": "已切到 {0}。注意：还有 {1} 个终端会话在跑旧配置，需自行重开窗口。",
     "uiOpening": "正在打开供应商设置页面…",
-    "uiFail": "打开设置页面失败：{0}"
+    "uiFail": "打开设置页面失败：{0}",
+    "taskPanel": "任务面板…",
+    "panelOpening": "正在打开任务面板…",
+    "panelFail": "打开任务面板失败：{0}"
   },
   "en": {
     "tooltip": "PocketAide Bridge (in tray)",
@@ -49,6 +52,9 @@
     "switchFail": "Failed to switch to {0}: {1}",
     "switchPendingTerm": "Switched to {0}. Note: {1} terminal session(s) still on the old config - reopen them.",
     "uiOpening": "Opening provider settings page...",
-    "uiFail": "Failed to open settings page: {0}"
+    "uiFail": "Failed to open settings page: {0}",
+    "taskPanel": "Task Panel...",
+    "panelOpening": "Opening task panel...",
+    "panelFail": "Failed to open task panel: {0}"
   }
 }

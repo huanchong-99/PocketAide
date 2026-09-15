@@ -55,6 +55,8 @@ $global:restarts = @()
 # CLI can never drift apart in behaviour.
 $SwitchJs   = Join-Path $RepoDir 'tools\switch\switch.js'
 $WebUiJs    = Join-Path $RepoDir 'tools\switch\webui.js'
+$PanelJs    = Join-Path $RepoDir 'tools\panel\server.js'
+$PanelTokenFile = Join-Path $RepoDir 'tools\panel\.token'
 $SwitchOut  = Join-Path $env:TEMP 'aicanmou-switch-result.json'
 $global:switchBusy = $false
 $global:pendingName = ''
@@ -196,6 +198,46 @@ function Open-SwitchUi {
   } catch { Show-Balloon ($global:L.uiFail -f $_.Exception.Message) }
 }
 
+# Task panel. Unlike the switch UI this one is a fixed-port resident service, because it must
+# support PWA install/offline (a random port would break the installed shortcut every restart).
+# So: if it is already listening, just open the browser; only start a process when it is not.
+# The token comes from the .token file rather than stdout, since an already-running instance
+# is not ours to read stdout from.
+function Open-TaskPanel {
+  Show-Balloon $global:L.panelOpening
+  try {
+    $port = 8787
+    if ($env:PANEL_PORT) { $port = [int]$env:PANEL_PORT }
+
+    $live = $false
+    try {
+      $c = New-Object System.Net.Sockets.TcpClient
+      $c.Connect('127.0.0.1', $port); $live = $true; $c.Close()
+    } catch { $live = $false }
+
+    if (-not $live) {
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName         = $NodeExe
+      $psi.Arguments        = '"' + $PanelJs + '" --no-open'
+      $psi.WorkingDirectory = $RepoDir
+      $psi.UseShellExecute  = $false
+      $psi.CreateNoWindow   = $true
+      [void][System.Diagnostics.Process]::Start($psi)
+      for ($i = 0; $i -lt 40; $i++) {          # up to ~4s for the listener to come up
+        Start-Sleep -Milliseconds 100
+        try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); $c.Close(); $live = $true; break } catch {}
+      }
+      if (-not $live) { throw 'panel did not start listening on port ' + $port }
+    }
+
+    $token = ''
+    if (Test-Path $PanelTokenFile) { $token = (Get-Content -Raw -Path $PanelTokenFile).Trim() }
+    $url = 'http://127.0.0.1:' + $port + '/'
+    if ($token) { $url = $url + '?t=' + $token }
+    Start-Process $url | Out-Null
+  } catch { Show-Balloon ($global:L.panelFail -f $_.Exception.Message) }
+}
+
 function Start-Bridge {
   if ($global:child -and -not $global:child.HasExited) { return }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -236,6 +278,7 @@ function Apply-Lang {
   $global:miExit.Text    = $global:L.exit
   if ($global:miSwitch)   { $global:miSwitch.Text   = $global:L.switchTo }
   if ($global:miSettings) { $global:miSettings.Text = $global:L.settings }
+  if ($global:miPanel) { $global:miPanel.Text = $global:L.taskPanel }
   try { $notify.Text     = $global:L.tooltip } catch {}
   Update-Status
   if ($global:miProvider) { Update-Provider }
@@ -281,6 +324,12 @@ $global:miSettings = New-Object System.Windows.Forms.ToolStripMenuItem
 $global:miSettings.Text = $global:L.settings
 $global:miSettings.add_Click({ Open-SwitchUi })
 [void]$menu.Items.Add($global:miSettings)
+[void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+$global:miPanel = New-Object System.Windows.Forms.ToolStripMenuItem
+$global:miPanel.Text = $global:L.taskPanel
+$global:miPanel.add_Click({ Open-TaskPanel })
+[void]$menu.Items.Add($global:miPanel)
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
 # Refresh provider info only when the menu is actually opened: keeps the 3s timer from spawning

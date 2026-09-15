@@ -476,6 +476,41 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
     processing = false;
   }
 
+  // ---------------------------------------------------------------- 面板变更 → 飞书
+  //
+  // 任务面板跑在电脑上，改动却应该让手机那头知道——这是本系统与纯本地任务应用的根本差别。
+  // 做法不是"直接发一张飞书卡片"(那样 claude 自己并不知道发生过什么, 你回头问它也答不上来),
+  // 而是**把变更写成提示词注入会话**, 让 claude 自己回一句, 回复经原路发到飞书:
+  // 改动既到了你手机上, 也进了对话上下文。与 runWakeup 同一套范式。
+  //
+  // 事件由面板写进 workspace/.inbox/(文件投递, 见 tools/panel/events.js), 这里轮询取。
+  // 用文件而非端口: 桥接没在跑时事件不会丢, 下次启动照样能播报。
+  let panelEvents = null;
+  try { panelEvents = require('../tools/panel/events'); }
+  catch (e) { log('[warn] 面板事件模块加载失败(面板改动将不会播报到飞书):', e && e.message); }
+
+  const PANEL_POLL_MS = 5000;
+  async function drainPanelEvents() {
+    if (!panelEvents || processing || restarting || shuttingDown || queue.length) return;
+    let evts = [];
+    try { evts = panelEvents.pending(); } catch (_) { return; }
+    // 攒一攒再发：连拖三张卡片不该炸出三轮对话。静默期内的操作合并成一条。
+    if (!panelEvents.isReady(evts)) return;
+    try {
+      log('面板变更 ' + evts.length + ' 条, 注入会话播报…');
+      panelEvents.clear(evts);          // 先清再跑：万一这轮失败也不要无限重播同一批
+      clearOutbox();
+      const scraped = await claude.ask(panelEvents.buildPrompt(evts), { readySignal: isOutboxFresh });
+      const filed = takeOutbox();
+      const reply = ((filed && filed.trim()) || scraped || '').trim();
+      if (reply && cfg.ownerOpenId) {
+        for (const c of chunkText(reply, 3500)) await feishu.sendCard(cfg.ownerOpenId, c, HEADER + ' (电脑面板)');
+      }
+      await commitAndPushRound('panel-event');
+    } catch (e) { log('面板变更播报失败(忽略):', e.message); }
+  }
+  setInterval(() => { drainPanelEvents().catch(() => {}); }, PANEL_POLL_MS).unref();
+
   // 重启后唤醒自检：注入提示词让 claude 只"汇报"上轮状态(不执行/不写文件)。回"完成"/空 => 仅记日志(不打扰飞书)；否则 => 把汇报转发给主人, 等"继续"指令。
   async function runWakeup(reason) {
     try {
