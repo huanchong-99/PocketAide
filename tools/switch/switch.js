@@ -351,11 +351,15 @@ function buildStatus() {
     // 配置说一套、实跑另一套。但"实跑"读的是最后一条会话记录，重启后若还没人说过话，
     // 它仍是上个会话留下的旧值——此时报"尚未重启"会把已经生效的状态说成故障。
     // 故先看会话进程是不是在那条记录之后才起来的：是 => 已重启、只是还没新记录，不算故障。
+    // 结论存进 s.liveState，CLI 与 Web 都只读它，避免各写一套比较逻辑、各犯各的误报。
     if (s.live && s.configuredModel && !modelMatches(s.configuredModel, s.live.model)) {
       const startedAfter = s.sessionStartedAt && s.live.atMs && s.sessionStartedAt > s.live.atMs;
+      s.liveState = startedAfter ? 'restarted' : 'stale';
       if (!startedAfter) {
         warnings.push(`${s.label} 配置=${s.configuredModel}，但最近一次实跑=${s.live.model}（该端尚未重启，配置还没生效）`);
       }
+    } else {
+      s.liveState = 'ok';
     }
     if (s.official && s.anthropicKeys.length) {
       warnings.push(`${s.label} 声称官方直连，却残留 ${s.anthropicKeys.length} 个 ANTHROPIC_* 键：${s.anthropicKeys.join(', ')}`);
@@ -761,10 +765,8 @@ function render(cmd, r) {
       if (!s.exists) { L.push('  配置文件不存在'); continue; }
       L.push(`  端点     ${s.baseUrl || '官方直连 (Max 订阅)'}`);
       L.push(`  配置模型 ${s.configuredModel || '(未指定)'}${s.provider ? `   [档案: ${s.provider}]` : ''}`);
-      const restarted = s.live && s.sessionStartedAt && s.live.atMs && s.sessionStartedAt > s.live.atMs;
-      const stale = s.live && s.configuredModel && !modelMatches(s.configuredModel, s.live.model);
       L.push(`  实跑模型 ${s.live ? `${s.live.model}   (最近活动 ${s.live.at})` : '(无会话记录)'}` +
-        (stale && restarted ? '   ← 会话已按新配置重启，下次对话即按新配置运行' : ''));
+        (s.liveState === 'restarted' ? '   ← 会话已按新配置重启，下次对话即按新配置运行' : ''));
       if (s.anthropicKeys.length) L.push(`  ANTHROPIC_* ${s.anthropicKeys.length} 个：${s.anthropicKeys.join(', ')}`);
     }
     if (r.warnings.length) { L.push(''); L.push('⚠ 告警'); for (const w of r.warnings) L.push(`  - ${w}`); }

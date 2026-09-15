@@ -131,14 +131,16 @@ let state = null;
 function renderScopes(s) {
   $('scopes').innerHTML = s.status.scopes.map((x) => {
     if (!x.exists) return `<div class="card scope"><h3>${esc(x.label)}</h3><div class="step-dim">配置文件不存在</div></div>`;
+    // 别在这儿自己比字符串：opus[1m] 与 claude-opus-5 是同一个模型的两种写法，裸比必误报橙。
+    // liveState 由服务端 buildStatus 算好（含别名归一 + 重启时刻判定），前端只负责显示。
     const live = x.live ? esc(x.live.model) : '(无会话记录)';
-    const drift = x.live && x.configuredModel && x.live.model !== x.configuredModel;
+    const note = x.liveState === 'restarted' ? '<div class="sub">已按新配置重启，下次对话即生效</div>' : '';
     return `<div class="card scope">
       <h3>${esc(x.label)} ${x.provider ? `<span class="pill on">${esc(x.provider)}</span>` : '<span class="pill">未识别</span>'}</h3>
       <dl class="kv">
         <dt>端点</dt><dd>${esc(x.baseUrl || '官方直连 (订阅)')}</dd>
         <dt>配置模型</dt><dd>${esc(x.configuredModel || '(未指定)')}</dd>
-        <dt>实跑模型</dt><dd class="${drift ? 'step-warn' : ''}">${live}</dd>
+        <dt>实跑模型</dt><dd class="${x.liveState === 'stale' ? 'step-warn' : ''}">${live}${note}</dd>
       </dl></div>`;
   }).join('');
 }
