@@ -44,6 +44,32 @@ for (const k of Object.keys(glb.env)) if (k.startsWith('ANTHROPIC_')) cur.env[k]
 | ② 落盘 | 写 settings.json | —— |
 | ③ 重启 | 杀掉在跑的会话让它重读 | **Claude Code 只在启动时读一次 settings**，不重启 = 白改；先杀再写则会留窗口期让进程抢读旧值 |
 
+## 四个入口，同一套实现
+
+| 入口 | 适合 | 怎么进 |
+|---|---|---|
+| **托盘菜单** | 高频、零输入：看当前跑什么、一键切换已有档 | 托盘图标 →「当前：xxx」+「切换供应商 ▸」 |
+| **Web 页面** | 低频、要输入：加/改供应商、填 Key、看体检、探活 | 托盘 →「供应商设置…」 |
+| **命令行** | 脚本化、排查 | `node tools/switch/switch.js ...` |
+| **飞书** | 人在外面 | 跟 AI 参谋说"切到 X" / "现在用的什么模型" |
+
+四个入口都走 `switch.js` 的同一套 `CMDS`——**没有任何一个入口能绕过"探活→落盘→重启"**。
+页面和命令行各写一份实现的话，迟早会出现"命令行切了、页面显示没切"这种对不上的事，
+所以 `webui.js` 直接调 `CMDS.use`，测试里也钉死了这一点（U8）。
+
+### Web 界面的安全设计
+
+页面能读写**全部供应商的明文 API Key**，所以它不是常驻服务：
+
+- **按需起**：点托盘「供应商设置…」才启动，页面停止心跳 45 秒后进程自杀
+- **只绑 `127.0.0.1`**：外网和局域网都碰不到
+- **随机端口**：`listen(0)`，不占固定端口也不可预测
+- **一次性 token**：每次启动新生成，所有 `/api/*` 都校验（时间安全比较）；页面拿到后立刻用
+  `history.replaceState` 把它从地址栏抹掉，不留在浏览器历史里
+- **Key 只出不进**：返回给页面的 Key 一律打码（`sk-abc***7f21`），页面永远拿不到完整 Key；
+  编辑时留空 = 保留原 Key
+- **CSP 锁死**：`default-src 'none'`，页面加载不了任何外部资源，杜绝 Key 被第三方脚本捎走
+
 ## 用法
 
 ```bash
@@ -82,13 +108,33 @@ node tools/switch/switch.js ps               # 看在跑的会话进程
 
 | 文件 | 说明 |
 |---|---|
-| `switch.js` | CLI 入口 + 供 `bridge/main.js` require 的 API（`syncBridge`） |
+| `switch.js` | CLI 入口 + 供 `bridge/main.js` require 的 API（`syncBridge`）+ 供 Web 复用的 `CMDS` |
 | `procs.js` | 会话进程发现与终止 |
+| `webui.js` | 本地 Web 服务（按需起、随机端口、一次性 token、心跳自杀） |
+| `webui.html` | 单文件前端，原生 JS 无框架，零依赖 |
 | `providers.json` | **含真实 API Key，已 gitignore，绝不入库**（首次运行 `init` 生成） |
 | `providers.example.json` | 脱敏模板，入库；照着它填自己的供应商 |
 
 首次使用：`node tools/switch/switch.js init` 会从现有的全局 / 桥接配置里把供应商档案播种出来；
 没有可播种的第三方配置时，照 `providers.example.json` 手工加一档即可。
+
+## 与托盘的接线
+
+`bridge/tray-host.ps1` 里三项：
+
+- **「当前：xxx / 模型」** — 菜单打开时调 `status --json` 刷新
+- **「切换供应商 ▸」** — 调 `list --json` 建二级菜单，勾选当前档；点击走 `use <名称> --json`
+- **「供应商设置…」** — 起 `webui.js --no-open`，读它首行打印的 `{url,port,token}` 再开浏览器
+
+两个约束必须守住：
+
+1. **切换不能阻塞 UI 线程。** 探活最长 20 秒，同步调用会把整个托盘菜单冻住。
+   所以 `Start-SwitchUse` 用 `Start-Process` 异步起、结果写临时 JSON，由 3 秒 timer 的
+   `Poll-SwitchResult` 取回并弹气泡。
+2. **`tray-host.ps1` 必须全文件纯 ASCII。** PowerShell 5.1 把无 BOM 的 `.ps1` 当 GBK 解码，
+   源码里的中文会乱码，甚至吃掉行尾换行、把下一行静默注释掉。所有中文进 `tray-labels.json`
+   （运行时用显式 UTF-8 解码器读），路径一律用 `$PSScriptRoot` 运行时取、不写字面量。
+   开发时踩过：测试脚本里写了中文路径字面量，直接变成乱码路径、目录找不到。
 
 ## 与桥接的接线
 

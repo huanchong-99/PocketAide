@@ -250,6 +250,62 @@ test('U7 switch status 可跑、只读、两端齐全', () => {
   console.log('        (当前档=' + j.current + '; 告警 ' + j.warnings.length + ' 条)');
 });
 
+// ===== U8 切换器 Web 界面：安全契约 =====
+// 这个页面能读写全部供应商的明文 Key，所以它的安全契约必须被测试钉死，而不是靠"我记得写了"：
+//   1) 没有正确 token 的请求一律 403(页面和 API 都是)
+//   2) 返回给页面的 Key 必须是打码的——页面永远拿不到完整 Key
+//   3) 只监听 127.0.0.1
+// 起真服务、发真请求、跑完杀掉，不留残留进程。
+test('U8 webui 安全契约: 无 token 403 / Key 不出明文 / 只绑本地', () => {
+  const probe = path.join(TMP, 'webui-probe.js');
+  fs.writeFileSync(probe, `
+    const { spawn } = require('child_process');
+    const path = require('path');
+    const REPO = ${JSON.stringify(REPO)};
+    const p = spawn(process.execPath, [path.join(REPO, 'tools', 'switch', 'webui.js'), '--no-open'],
+      { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] });
+    let buf = '';
+    const done = (msg, code) => { try { p.kill(); } catch (_) {} console.log(msg); process.exit(code); };
+    const timer = setTimeout(() => done('FAIL 启动超时', 1), 15000);
+    p.stdout.on('data', async (d) => {
+      buf += d;
+      if (!buf.includes('\\n')) return;
+      clearTimeout(timer);
+      let info; try { info = JSON.parse(buf.split('\\n')[0]); } catch (e) { return done('FAIL 首行不是 JSON: ' + buf.slice(0, 120), 1); }
+      const base = 'http://127.0.0.1:' + info.port;
+      try {
+        const bad = await fetch(base + '/api/state', { headers: { 'x-switch-token': 'x'.repeat(info.token.length) } });
+        if (bad.status !== 403) return done('FAIL 错误 token 未被拒绝, got ' + bad.status, 1);
+        const noTok = await fetch(base + '/');
+        if (noTok.status !== 403) return done('FAIL 页面无 token 未被拒绝, got ' + noTok.status, 1);
+        const ok = await fetch(base + '/api/state', { headers: { 'x-switch-token': info.token } });
+        if (ok.status !== 200) return done('FAIL 正确 token 被拒, got ' + ok.status, 1);
+        const j = await ok.json();
+        if (!j.ok || !Array.isArray(j.data.providers)) return done('FAIL state 结构不对', 1);
+        const raw = JSON.stringify(j.data);
+        if (/"ANTHROPIC_AUTH_TOKEN"/.test(raw)) return done('FAIL 响应里出现了原始 env Key 字段', 1);
+        for (const pr of j.data.providers) {
+          if (pr.hasToken && !/\\*\\*\\*/.test(pr.tokenMasked)) return done('FAIL Key 未打码: ' + pr.name, 1);
+        }
+        done('PASS ' + j.data.providers.length + ' 档, 端口 ' + info.port, 0);
+      } catch (e) { done('FAIL 请求异常: ' + e.message, 1); }
+    });
+    p.on('error', (e) => done('FAIL 无法启动: ' + e.message, 1));
+  `, 'utf8');
+  const out = execFileSync('node', [probe], { cwd: REPO, encoding: 'utf8', timeout: 30000 }).trim();
+  assert(out.startsWith('PASS'), out);
+  console.log('        (' + out.replace(/^PASS /, '') + ')');
+});
+
+test('U8 webui 与 CLI 同源: 页面写操作复用 switch.js 的 CMDS', () => {
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  for (const k of ['use', 'check', 'model', 'restart', 'rm']) {
+    assert(typeof sw.CMDS[k] === 'function', 'CMDS 缺少 ' + k + '（webui 依赖它，缺了页面就会另走一套逻辑）');
+  }
+  const webui = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.js'), 'utf8');
+  assert(/sw\.CMDS\.use\(/.test(webui), 'webui 的切换必须调 CMDS.use，否则会绕过"探活→落盘→重启"三步');
+});
+
 // ---- 收尾 ----
 rmrfDir(TMP);
 

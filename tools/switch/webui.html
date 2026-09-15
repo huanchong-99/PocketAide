@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>供应商 / 模型切换</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --fg:#e6e9ef; --dim:#9aa3b2; --accent:#5b9cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Microsoft YaHei","Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 20px 60px}
+  h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:28px 0 12px;color:var(--dim);font-weight:600}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .scope{flex:1;min-width:280px}
+  .scope h3{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .kv{display:grid;grid-template-columns:76px 1fr;gap:4px 10px;font-size:13px}
+  .kv dt{color:var(--dim)} .kv dd{margin:0;word-break:break-all;font-family:Consolas,monospace}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);color:var(--dim)}
+  .pill.on{background:rgba(63,185,80,.14);border-color:rgba(63,185,80,.4);color:var(--ok)}
+  .warn-box{margin-top:14px;border:1px solid rgba(210,153,34,.4);background:rgba(210,153,34,.1);border-radius:10px;padding:10px 14px}
+  .warn-box div{color:var(--warn);font-size:13px}
+  .ok-box{margin-top:14px;border:1px solid rgba(63,185,80,.3);background:rgba(63,185,80,.08);border-radius:10px;padding:10px 14px;color:var(--ok);font-size:13px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  tr.cur{background:rgba(91,156,255,.08)}
+  td.mono{font-family:Consolas,monospace;font-size:12.5px;color:var(--dim);word-break:break-all}
+  button{font:inherit;font-size:13px;padding:5px 12px;border-radius:7px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--fg);cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#06101f;font-weight:600}
+  button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+  .acts{display:flex;gap:6px;justify-content:flex-end}
+  label{display:block;margin:10px 0 4px;font-size:12.5px;color:var(--dim)}
+  input{width:100%;padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:#0c0e13;color:var(--fg);font:13px Consolas,monospace}
+  input:focus{outline:none;border-color:var(--accent)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:0 12px}
+  .hint{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.5}
+  #log{margin-top:14px;background:#0a0c10;border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+    font:12.5px/1.75 Consolas,monospace;white-space:pre-wrap;display:none;max-height:340px;overflow:auto}
+  .step-ok{color:var(--ok)} .step-bad{color:var(--bad)} .step-warn{color:var(--warn)} .step-dim{color:var(--dim)}
+  .spin{display:inline-block;animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>供应商 / 模型切换</h1>
+  <div class="sub">
+    切换 = <b>探活 → 落盘 → 重启</b>。Claude Code 只在启动时读一次配置，所以每次切换都会真的结束并重启会话，不是只改文件。
+  </div>
+
+  <div class="row" id="scopes"></div>
+  <div id="alerts"></div>
+  <div id="log"></div>
+
+  <h2>供应商</h2>
+  <div class="card" style="padding:0"><table id="tbl"><tbody></tbody></table></div>
+
+  <h2 id="formTitle">添加供应商</h2>
+  <div class="card">
+    <div class="grid2">
+      <div><label>名称（英文标识，用于命令行）</label><input id="f_name" placeholder="relay"></div>
+      <div><label>显示名</label><input id="f_label" placeholder="第三方中转"></div>
+    </div>
+    <label>Base URL</label>
+    <input id="f_url" placeholder="https://api.example.com">
+    <div class="hint">填到 <code>/v1</code> <b>之前</b>那一段——和 Claude Code 读 <code>ANTHROPIC_BASE_URL</code> 的规则一致（它自己会拼 <code>/v1/messages</code>）。中转给的是 <code>https://x.com/v1</code> 就填 <code>https://x.com</code>；要求带 <code>/anthropic</code> 后缀的就照它文档填。填错不会切坏：探活会报 404「端点路径不对」，切换会被直接拒绝。</div>
+    <div class="grid2">
+      <div><label>API Key</label><input id="f_token" type="password" placeholder="留空 = 不修改已保存的 Key"></div>
+      <div><label>主模型名</label><input id="f_model" placeholder="claude-opus-4-20250514"></div>
+    </div>
+    <label style="margin-top:14px">别名档位映射（选填，留空则不写；不少中转缺这组会回落到官方模型名而 404）</label>
+    <div class="grid4">
+      <div><label style="margin-top:0">opus</label><input id="f_opus"></div>
+      <div><label style="margin-top:0">sonnet</label><input id="f_sonnet"></div>
+      <div><label style="margin-top:0">haiku</label><input id="f_haiku"></div>
+      <div><label style="margin-top:0">reasoning</label><input id="f_reasoning"></div>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:8px">
+      <button class="primary" id="btnSave">保存</button>
+      <button id="btnTest">保存并探活</button>
+      <button id="btnReset" style="margin-left:auto">清空 / 新建</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// token 从 URL 取一次就抹掉地址栏，避免它留在浏览器历史/标题里被无意分享
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+history.replaceState(null, '', location.pathname);
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(name, body) {
+  const r = await fetch('/api/' + name, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'x-switch-token': TOKEN, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || '请求失败');
+  return j.data;
+}
+
+// ---- 操作日志（切换过程逐步显示，让"重启真的发生了"看得见）----
+const logBox = $('log');
+function logClear() { logBox.innerHTML = ''; logBox.style.display = 'block'; }
+function logLine(html, cls) {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.innerHTML = html;
+  logBox.appendChild(d); logBox.scrollTop = logBox.scrollHeight;
+  return d;
+}
+
+let state = null;
+
+function renderScopes(s) {
+  $('scopes').innerHTML = s.status.scopes.map((x) => {
+    if (!x.exists) return `<div class="card scope"><h3>${esc(x.label)}</h3><div class="step-dim">配置文件不存在</div></div>`;
+    const live = x.live ? esc(x.live.model) : '(无会话记录)';
+    const drift = x.live && x.configuredModel && x.live.model !== x.configuredModel;
+    return `<div class="card scope">
+      <h3>${esc(x.label)} ${x.provider ? `<span class="pill on">${esc(x.provider)}</span>` : '<span class="pill">未识别</span>'}</h3>
+      <dl class="kv">
+        <dt>端点</dt><dd>${esc(x.baseUrl || '官方直连 (订阅)')}</dd>
+        <dt>配置模型</dt><dd>${esc(x.configuredModel || '(未指定)')}</dd>
+        <dt>实跑模型</dt><dd class="${drift ? 'step-warn' : ''}">${live}</dd>
+      </dl></div>`;
+  }).join('');
+}
+
+function renderAlerts(s) {
+  const w = s.status.warnings || [];
+  const terms = (s.procs.terminalClaude || []).length;
+  let html = '';
+  if (w.length) html += `<div class="warn-box">${w.map((x) => `<div>⚠ ${esc(x)}</div>`).join('')}</div>`;
+  else html += `<div class="ok-box">✓ 两端一致，无漂移</div>`;
+  html += `<div class="sub" style="margin-top:10px">桥接进程：${s.procs.bridgeUp ? '运行中' : '<span class="step-warn">未运行</span>'}
+    ｜ 桥接会话 ${(s.procs.bridgeClaude || []).length} 个 ｜ 终端会话 ${terms} 个</div>`;
+  $('alerts').innerHTML = html;
+}
+
+function renderTable(s) {
+  // 首次使用：档案还是空的。这时最该做的是引导，而不是给一张空表。
+  if (!s.providers.length) {
+    $('tbl').querySelector('tbody').innerHTML = `<tr><td style="padding:20px">
+      <div style="margin-bottom:10px">还没有任何供应商档案。</div>
+      <div class="hint" style="margin:0 0 14px">可以从你现有的 Claude Code 配置（全局 + 桥接）自动播种一份，或直接在下方手工添加。</div>
+      <button class="primary" id="btnSeed">从现有配置播种</button>
+    </td></tr>`;
+    const b = $('btnSeed');
+    if (b) b.onclick = async () => {
+      b.disabled = true; logClear(); logLine('正在从现有配置播种 …', 'step-dim');
+      try { const r = await api('init'); logLine(`✓ 已播种 ${r.providers.length} 个档：${r.providers.map((x) => x.name).join(', ')}`, 'step-ok'); await refresh(); }
+      catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); b.disabled = false; }
+    };
+    return;
+  }
+  $('tbl').querySelector('tbody').innerHTML = s.providers.map((p) => `
+    <tr class="${p.current ? 'cur' : ''}">
+      <td><b>${esc(p.label)}</b><br><span class="step-dim" style="font-size:12px">${esc(p.name)}${p.current ? ' · 当前' : ''}</span></td>
+      <td class="mono">${esc(p.baseUrl || '官方直连')}</td>
+      <td class="mono">${esc(p.model || '-')}</td>
+      <td class="mono">${p.hasToken ? esc(p.tokenMasked) : '<span class="step-dim">—</span>'}</td>
+      <td><div class="acts">
+        <button data-act="use" data-n="${esc(p.name)}" ${p.current ? 'disabled' : ''}>切换</button>
+        <button data-act="check" data-n="${esc(p.name)}">探活</button>
+        <button data-act="edit" data-n="${esc(p.name)}">编辑</button>
+        <button class="danger" data-act="del" data-n="${esc(p.name)}" ${p.current || p.name === 'official' ? 'disabled' : ''}>删除</button>
+      </div></td>
+    </tr>`).join('');
+}
+
+async function refresh() {
+  state = await api('state');
+  renderScopes(state); renderAlerts(state); renderTable(state);
+}
+
+// ---- 切换：把三步过程逐条显示出来 ----
+async function doUse(name) {
+  logClear();
+  logLine(`正在切换到 <b>${esc(name)}</b> …`, 'step-dim');
+  const pending = logLine('<span class="spin">◐</span> ① 探活 → ② 写入配置 → ③ 重启会话', 'step-dim');
+  let r;
+  try {
+    r = await api('use', { name, scope: 'both' });
+  } catch (e) {
+    pending.remove();
+    logLine('✗ 切换被拒绝：' + esc(e.message), 'step-bad');
+    logLine('配置未改动，系统仍在原供应商上运行。', 'step-dim');
+    return;
+  }
+  pending.remove();
+
+  if (r.check) {
+    if (r.check.skipped) logLine(`① 探活：跳过 — ${esc(r.check.skipped)}`, 'step-dim');
+    else logLine(`① 探活：通 (HTTP ${r.check.status}, ${r.check.ms}ms)`, 'step-ok');
+  }
+  for (const x of r.results || []) {
+    if (x.skipped) { logLine(`② ${esc(x.scope)}：跳过 — ${esc(x.skipped)}`, 'step-dim'); continue; }
+    logLine(`② ${esc(x.label)}：${x.changed ? '已写入' : '无变化'}　模型 ${esc(x.modelBefore || '-')} → ${esc(x.modelAfter || '-')}`
+      + (x.removed.length ? `　<span class="step-dim">(删除 ${x.removed.length} 个旧键)</span>` : ''), x.changed ? 'step-ok' : 'step-dim');
+  }
+  const rs = r.restart || {};
+  if (rs.bridge) {
+    if (rs.bridge.ok === false) logLine(`③ 桥接：未重启 — ${esc(rs.bridge.reason)}`, 'step-warn');
+    else if ((rs.bridge.killed || []).length) logLine(`③ 桥接：已结束会话 ${rs.bridge.killed.join(', ')}，桥接正在自动拉起新会话（新配置将在此刻生效）`, 'step-ok');
+    else logLine(`③ 桥接：${esc(rs.bridge.note || '无需重启')}`, 'step-dim');
+  }
+  if (rs.terminal) {
+    const t = rs.terminal;
+    if ((t.killed || []).length) logLine(`③ 终端：已结束 ${t.killed.join(', ')}（需自行重开窗口）`, 'step-ok');
+    if ((t.pending || []).length) {
+      logLine(`③ 终端：<b>${t.pending.length} 个终端会话仍在跑旧配置</b> — Claude Code 只在启动时读配置，它们不重启就不会生效。`, 'step-warn');
+      const d = logLine('', '');
+      const b = document.createElement('button');
+      b.className = 'danger'; b.textContent = `结束这 ${t.pending.length} 个终端会话`;
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          const rr = await api('restart', { scope: 'global', includeSelf: true });
+          logLine(`③ 终端：已结束 ${(rr.terminal.killed || []).join(', ') || '(无)'}（需自行重开窗口）`, 'step-ok');
+        } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
+        refresh();
+      };
+      d.appendChild(b);
+    } else if (!(t.killed || []).length && t.note) logLine(`③ 终端：${esc(t.note)}`, 'step-dim');
+  }
+  await refresh();
+}
+
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button[data-act]');
+  if (!btn) return;
+  const name = btn.dataset.n, act = btn.dataset.act;
+  btn.disabled = true;
+  try {
+    if (act === 'use') await doUse(name);
+    else if (act === 'check') {
+      logClear(); logLine(`探活 <b>${esc(name)}</b> …`, 'step-dim');
+      const r = await api('check', { name });
+      const c = r.checks[0];
+      if (c.skipped) logLine(`— ${esc(name)}：跳过 — ${esc(c.skipped)}`, 'step-dim');
+      else if (c.ok) logLine(`✓ ${esc(name)}：通 (HTTP ${c.status}, ${c.ms}ms) ${esc(c.model)}`, 'step-ok');
+      else logLine(`✗ ${esc(name)}：${esc(c.reason)}${c.detail ? ' — ' + esc(c.detail) : ''}`, 'step-bad');
+    }
+    else if (act === 'edit') fillForm(state.providers.find((p) => p.name === name));
+    else if (act === 'del') {
+      if (!confirm(`删除供应商「${name}」？`)) return;
+      await api('deleteProvider', { name });
+      await refresh();
+    }
+  } catch (e) { logClear(); logLine('✗ ' + esc(e.message), 'step-bad'); }
+  finally { btn.disabled = false; }
+});
+
+// ---- 表单 ----
+function fillForm(p) {
+  $('formTitle').textContent = p ? `编辑供应商：${p.name}` : '添加供应商';
+  $('f_name').value = p ? p.name : '';
+  $('f_label').value = p ? p.label : '';
+  $('f_url').value = p ? p.baseUrl : '';
+  $('f_token').value = '';
+  $('f_token').placeholder = p && p.hasToken ? `留空 = 保留已存的 ${p.tokenMasked}` : '留空 = 不修改已保存的 Key';
+  $('f_model').value = p ? p.model : '';
+  for (const k of ['opus', 'sonnet', 'haiku', 'reasoning']) $('f_' + k).value = p ? (p.aliases[k] || '') : '';
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+}
+
+function formPayload() {
+  return {
+    name: $('f_name').value.trim(),
+    label: $('f_label').value.trim() || $('f_name').value.trim(),
+    baseUrl: $('f_url').value.trim(),
+    token: $('f_token').value,
+    model: $('f_model').value.trim(),
+    aliases: {
+      opus: $('f_opus').value.trim(), sonnet: $('f_sonnet').value.trim(),
+      haiku: $('f_haiku').value.trim(), reasoning: $('f_reasoning').value.trim(),
+    },
+  };
+}
+
+async function save(thenCheck) {
+  logClear();
+  try {
+    const p = formPayload();
+    await api('saveProvider', p);
+    logLine(`✓ 已保存「${esc(p.name)}」`, 'step-ok');
+    await refresh();
+    if (thenCheck) {
+      logLine('探活中 …', 'step-dim');
+      const r = await api('check', { name: p.name });
+      const c = r.checks[0];
+      if (c.ok) logLine(`✓ 探活通过 (HTTP ${c.status}, ${c.ms}ms) — 可以切换了`, 'step-ok');
+      else if (c.skipped) logLine(`— 探活跳过：${esc(c.skipped)}`, 'step-dim');
+      else logLine(`✗ 探活失败：${esc(c.reason)}${c.detail ? ' — ' + esc(c.detail) : ''}`, 'step-bad');
+    }
+  } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
+}
+
+$('btnSave').onclick = () => save(false);
+$('btnTest').onclick = () => save(true);
+$('btnReset').onclick = () => fillForm(null);
+
+refresh().catch((e) => { logClear(); logLine('✗ 加载失败：' + esc(e.message), 'step-bad'); });
+setInterval(() => api('ping').catch(() => {}), 10000);   // 心跳；停跳后服务自行退出
+</script>
+</body>
+</html>

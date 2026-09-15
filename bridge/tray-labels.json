@@ -11,7 +11,19 @@
     "restart": "重启桥接",
     "restarted": "桥接已重启。",
     "exit": "退出",
-    "toggle": "切换语言 → English"
+    "toggle": "切换语言 → English",
+    "provider": "当前：{0} / {1}",
+    "providerUnknown": "当前：读取中…",
+    "providerErr": "当前：读取失败（切换器不可用）",
+    "switchTo": "切换供应商",
+    "switchNone": "（无可用供应商，请先在设置里添加）",
+    "settings": "供应商设置…",
+    "switching": "正在切换到 {0}：探活 → 写入配置 → 重启会话…",
+    "switchOk": "已切换到 {0}（{1}），会话已重启，新配置已生效。",
+    "switchFail": "切换到 {0} 失败：{1}",
+    "switchPendingTerm": "已切到 {0}。注意：还有 {1} 个终端会话在跑旧配置，需自行重开窗口。",
+    "uiOpening": "正在打开供应商设置页面…",
+    "uiFail": "打开设置页面失败：{0}"
   },
   "en": {
     "tooltip": "PocketAide Bridge (in tray)",
@@ -25,6 +37,18 @@
     "restart": "Restart Bridge",
     "restarted": "Bridge restarted.",
     "exit": "Exit",
-    "toggle": "Switch language → 中文"
+    "toggle": "Switch language → 中文",
+    "provider": "Current: {0} / {1}",
+    "providerUnknown": "Current: loading...",
+    "providerErr": "Current: unavailable (switcher not loaded)",
+    "switchTo": "Switch provider",
+    "switchNone": "(no providers yet - add one in settings)",
+    "settings": "Provider settings...",
+    "switching": "Switching to {0}: probe -> write config -> restart session...",
+    "switchOk": "Switched to {0} ({1}). Session restarted, new config is live.",
+    "switchFail": "Failed to switch to {0}: {1}",
+    "switchPendingTerm": "Switched to {0}. Note: {1} terminal session(s) still on the old config - reopen them.",
+    "uiOpening": "Opening provider settings page...",
+    "uiFail": "Failed to open settings page: {0}"
   }
 }

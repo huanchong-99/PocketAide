@@ -686,7 +686,8 @@ function render(cmd, r) {
     }
   } else if (cmd === 'use' || cmd === 'model') {
     if (cmd === 'use') {
-      L.push(`已切到：${r.switched}（${r.label}）`);
+      const dry = (r.results || []).some((x) => x.dryRun);
+      L.push(dry ? `[预演，未落盘] 若切到：${r.switched}（${r.label}）` : `已切到：${r.switched}（${r.label}）`);
       if (r.check) L.push(r.check.skipped ? `  探活：跳过 — ${r.check.skipped}` : `  探活：${r.check.ok ? `通 (${r.check.ms}ms)` : '失败 — ' + r.check.reason}`);
     } else {
       L.push(`已设模型：${r.provider} → ${r.model}${r.alias ? `（别名 ${r.alias}）` : ''}`);
@@ -760,4 +761,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { syncBridge, applyProvider, modelMatches, buildStatus, detectLive, SCOPES, STORE };
+// CMDS / parseArgs 一并导出：Web UI 直接复用同一套命令实现，绝不另写一份——
+// 两个入口走不同代码路径，迟早会出现"CLI 切了、页面显示没切"这类对不上的行为。
+module.exports = {
+  syncBridge, applyProvider, modelMatches, buildStatus, detectLive,
+  loadStore, saveStore, checkProvider, CMDS, parseArgs, SCOPES, STORE,
+};
