@@ -297,47 +297,64 @@ test('U8 webui 安全契约: 无 token 403 / Key 不出明文 / 只绑本地', (
   console.log('        (' + out.replace(/^PASS /, '') + ')');
 });
 
-test('U7 桥接播种不继承本机供应商: ANTHROPIC_* 与顶层 model 一律剥离', () => {
-  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
-  // 模拟"全局此刻正配着某第三方"的本机配置被拿去给桥接播种
-  const global = {
-    model: 'vendor-a-pro',
-    hooks: { keep: 1 }, enabledPlugins: { p: true },
-    env: {
-      ANTHROPIC_BASE_URL: 'https://api.vendor-a.test/anthropic',
-      ANTHROPIC_AUTH_TOKEN: 'sk-should-never-be-inherited',
-      ANTHROPIC_MODEL: 'vendor-a-pro',
-      CLAUDE_CODE_EFFORT_LEVEL: 'max',
-    },
-  };
-  const seed = sw.sanitizeForBridgeSeed(global);
-  const leaked = Object.keys(seed.env || {}).filter((k) => k.startsWith('ANTHROPIC_'));
-  assert(leaked.length === 0, '播种把本机供应商继承过去了: ' + leaked.join(','));
-  assert(!seed.model, '播种把本机模型继承过去了: ' + seed.model);
-  assert(seed.env.CLAUDE_CODE_EFFORT_LEVEL === 'max', '不该动非供应商 env');
-  assert(seed.hooks && seed.hooks.keep === 1 && seed.enabledPlugins, '应继承 hooks/plugins 等行为设置');
-  assert(global.env.ANTHROPIC_BASE_URL && global.model, '纯函数不得就地修改调用方传入的对象');
-  // 桥接侧必须真的走这条路径，而不是又退回整份复制
+test('U7 桥接首次启动不从本机拷任何配置(只写自有基线)', () => {
+  // 定死的规矩: 两端天生独立。桥接该有什么配置是桥接自己的事, 不该取决于"第一次启动那天本机长什么样"。
+  // 曾两次栽在这上面: 先是整份复制(连第三方 Base URL + Key 一起继承), 后改成"剥掉 ANTHROPIC_* 再复制"
+  // ——Key 是不带了, 但拷贝这个行为本身仍然错。现在: 一个字节都不拷, 只写自己的最小基线。
   const main = fs.readFileSync(path.join(REPO, 'bridge', 'main.js'), 'utf8');
-  assert(/sanitizeForBridgeSeed/.test(main), 'bridge/main.js 播种未经过 sanitizeForBridgeSeed');
-  assert(!/copyFileSync\(srcS, dstS\)/.test(main), 'bridge/main.js 仍在整份复制全局 settings(会继承供应商)');
+  const m = /const BRIDGE_BASELINE_SETTINGS = (\{[\s\S]*?\n\};)/.exec(main);
+  assert(m, 'bridge/main.js 缺少 BRIDGE_BASELINE_SETTINGS 自有基线');
+  // eslint-disable-next-line no-new-func
+  const baseline = new Function('return ' + m[1].replace(/;$/, ''))();
+  const bad = Object.keys(baseline.env || {}).filter((k) => k.startsWith('ANTHROPIC_'));
+  assert(bad.length === 0, '基线里不该有任何 ANTHROPIC_*: ' + bad.join(','));
+  assert(!baseline.model, '基线不该钉死 model(那是 tools/switch 的职责): ' + baseline.model);
+  assert(baseline.permissions && baseline.permissions.defaultMode === 'auto',
+    '基线必须 defaultMode=auto: 伪终端后面没有人, 弹权限框就是死锁');
+
+  // 播种块里不许再出现任何"从本机读配置"的动作
+  const seedBlock = /const dstS = path\.join\(BRIDGE_HOME, 'settings\.json'\);[\s\S]*?const dstC[\s\S]*?\n    \}/.exec(main);
+  assert(seedBlock, '找不到 settings/config 播种块');
+  assert(!/readFileSync\(srcS|copyFileSync\(srcS|path\.join\(src,/.test(seedBlock[0]),
+    '播种块仍在读本机全局配置: ' + seedBlock[0].slice(0, 200));
+  assert(!/homedir\(\)/.test(seedBlock[0]), '播种块仍在读用户主目录');
+
+  // .claude.json 也不许再从 ~/.claude.json 播种(那份带着本机所有项目的元数据)
+  assert(!/existsSync\(dstJson\) \? dstJson : path\.join\(os\.homedir\(\)/.test(main),
+    '.claude.json 仍在从本机主配置播种');
+
+  // 唯一还允许从本机取的: 登录凭据(是登录态不是配置, 不取最新会掉登录)
+  assert(/copyFileSync\(path\.join\(src, '\.credentials\.json'\)/.test(main),
+    '凭据刷新被误删了: 桥接会掉登录、逼着重新登一次');
 });
 
-test('U7 从本机复制一档: 官方档不带任何 Key(走已登录凭据, 不用重新登录)', () => {
+test('U7 复制入口: 全局→桥接整份覆盖, 第三方带 Key、官方不用重新登录', () => {
   const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
-  assert(typeof sw.CMDS.import === 'function', '缺少 import 命令');
-  // 官方档的定义就是"一个 ANTHROPIC_* 都不写"——落地后必须彻底干净，
-  // 鉴权才会回落到 ~/.claude/.credentials.json 的 OAuth 凭据(桥接每次启动从全局刷新)。
+  assert(typeof sw.CMDS['copy-global'] === 'function', '缺少 copy-global 命令');
+  assert(typeof sw.CMDS.import !== 'function', '旧的 import(存成档案)语义已废弃, 不该还在');
+  // 复制必须是覆盖式: 合并同步不了"删除"——本机把 ANTHROPIC_* 整组删掉切回官方订阅时,
+  // 合并式传不过去, 桥接就卡在旧供应商上。那正是那次漂移事故的成因。
+  const src = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'switch.js'), 'utf8');
+  const body = /async 'copy-global'\(a\) \{[\s\S]*?\n  \},/.exec(src);
+  assert(body, '找不到 copy-global 实现');
+  assert(!/sanitize|isAnthropicKey|delete .*ANTHROPIC/.test(body[0]),
+    'copy-global 不该剥离任何键: 它要能整份搬第三方(含 Key), 也要能搬官方');
+  assert(/writeJsonAtomic\(dst, next\)/.test(body[0]), '覆盖必须走原子写+备份');
+  assert(/restartBridgeSession/.test(body[0]), '复制完必须重启桥接会话, 否则又是只改文件的假生效');
+
+  // 官方档的定义就是"一个 ANTHROPIC_* 都不写"——落地后必须彻底干净,
+  // 鉴权才会回落到 .credentials.json 的 OAuth 凭据(桥接每次启动从本机刷新), 不用重新登录。
   const out = sw.applyProvider(
     { model: 'x', env: { ANTHROPIC_BASE_URL: 'https://old.test', ANTHROPIC_AUTH_TOKEN: 'sk-old' } },
     { official: true, model: 'opus[1m]', env: {} });
   assert(Object.keys(out.env || {}).length === 0, '官方档不该留任何 env 键');
   assert(out.model === 'opus[1m]', '官方档模型未落地');
-  // 页面的「从本机当前配置复制」必须复用同一条命令，不能另写一套导入逻辑
+
+  // 页面的复制入口必须复用同一条命令, 不能另写一套
   const webui = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.js'), 'utf8');
-  assert(/sw\.CMDS\.import\(/.test(webui), 'webui 的复制入口未复用 CMDS.import');
+  assert(/sw\.CMDS\['copy-global'\]\(/.test(webui), 'webui 的复制入口未复用 CMDS[copy-global]');
   const html = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.html'), 'utf8');
-  assert(/btnImport/.test(html) && /importLocal/.test(html), '页面缺少「从本机当前配置复制」入口');
+  assert(/btnImport/.test(html) && /copyGlobal/.test(html), '页面缺少「复制到桥接」入口');
 });
 
 test('U8 webui 与 CLI 同源: 页面写操作复用 switch.js 的 CMDS', () => {

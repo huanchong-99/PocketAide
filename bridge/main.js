@@ -261,43 +261,45 @@ function markRan() {
 // 关键事实(均已实测)：Claude Code 按"规范化后的绝对 cwd"给会话分桶——junction 会被解析回真身, 故
 // junction 无法隔离；而独立 CLAUDE_CONFIG_DIR 能真正把会话分到别处, 且把 ~/.claude 的 Max 凭据复制过来后
 // 鉴权照常(零额外计费, 守住 C1)。cwd 仍钉死仓库, 故 CLAUDE.md 自动加载、相对路径/kg/outbox 全不受影响。
-// 此目录在 bridge/ 下、已 gitignore；只读取(复制)~/.claude, 从不修改主配置, 不越出本仓库。
+// 此目录在 bridge/ 下、已 gitignore；除登录凭据外不读取本机主配置, 从不修改主配置, 不越出本仓库。
 const BRIDGE_HOME = path.join(REPO, 'bridge', '.claude-home');
+
+// 桥接首次启动时给自己写的最小基线。刻意只有两条、且都是"桥接场景固有"的，不是从本机抄来的：
+//   defaultMode=auto —— 伪终端后面没有人，弹权限框就是死锁；
+//   deny WebFetch/WebSearch —— 兼容端点对这两个工具的 tool_reference 有服务端 bug，加载即毒会话。
+// 供应商与模型**一概不写**，那是 tools/switch 的职责(每次拉起 claude 前落地)。
+const BRIDGE_BASELINE_SETTINGS = {
+  permissions: { defaultMode: 'auto', deny: ['WebFetch', 'WebSearch'] },
+};
+
 function prepareConfigHome() {
   try {
     fs.mkdirSync(path.join(BRIDGE_HOME, 'projects'), { recursive: true });
     const src = path.join(os.homedir(), '.claude');
-    // 凭据每次都从全局刷新：Max token 会轮换, 不取最新会掉登录, 故凭据始终以全局为准。
+    // 凭据每次都从全局刷新。**这是登录态、不是配置**，也是唯一还从本机取的东西：Max token 会轮换,
+    // 不取最新就会掉登录、逼着在桥接里重新登一次(还会多占一个席位)。配置类文件一律不再拷, 见下。
     try { fs.copyFileSync(path.join(src, '.credentials.json'), path.join(BRIDGE_HOME, '.credentials.json')); } catch (_) {}
-    // settings.json / config.json：本地优先、全局兜底。本地已存在就保留(桥接自己决定 effort 等行为,
-    // 不再被全局覆盖)；本地不存在才从全局播种一次。config.json 同理。
+    // settings.json / config.json：**一律不从本机全局拷贝**，首次起来就写桥接自己的最小基线。
     //
-    // ⚠️ 供应商相关的 ANTHROPIC_* **不在这里处理**，交给 tools/switch 在每次拉起 claude 前统一落地。
-    // 这里原本有一段"把全局的 ANTHROPIC_* 覆盖到桥接这份"的同步，只覆盖、不删除——使用者后来把全局
-    // ANTHROPIC_* 整组删掉切回官方订阅时，删除同步不过去，桥接就卡在旧供应商上：实测曾连续数周
-    // 终端跑官方模型、飞书跑第三方模型而无人察觉。详见 tools/switch/README.md。
+    // 这里原先是"本地不存在就从全局播种一份"。两次都错在同一个地方——把本机的状态偷偷变成桥接的状态：
+    //   ① 最初是整份复制，会把全局当时配着的第三方 Base URL + Key 静默带进桥接；
+    //   ② 后来改成"剥掉 ANTHROPIC_* 再复制"，Key 是不带了，可**拷贝这个行为本身**仍然错——
+    //      桥接该有什么配置是桥接自己的事，不该取决于"第一次启动那天本机恰好长什么样"。
+    // 现在：两端彻底独立，谁也不偷看谁。要让桥接跟本机一致，走显式入口
+    // （托盘「供应商设置…」页面的"复制到桥接"按钮 / `switch.js copy-global`），点了才复制、复制即覆盖。
     {
       const dstS = path.join(BRIDGE_HOME, 'settings.json');
-      const srcS = path.join(src, 'settings.json');
-      // 播种要继承 hooks/plugins/effort 这些行为设置, 但**绝不继承供应商**——整份复制会把全局当时
-      // 配着的第三方 Base URL + Key 静默带进桥接; 若此时还没有 providers.json, syncBridge 不做任何事,
-      // 桥接就跑在一个"档案里根本没有"的供应商上。故一律过 sanitizeForBridgeSeed 剥掉 ANTHROPIC_*
-      // 与顶层 model。切换器不可用时宁可不播种(claude 用默认配置起来), 也不把供应商继承过去。
-      if (!fs.existsSync(dstS) && providerSwitch) {
-        try {
-          const glb = JSON.parse(fs.readFileSync(srcS, 'utf8'));
-          fs.writeFileSync(dstS, JSON.stringify(providerSwitch.sanitizeForBridgeSeed(glb), null, 2));
-        } catch (_) {}
+      if (!fs.existsSync(dstS)) {
+        try { fs.writeFileSync(dstS, JSON.stringify(BRIDGE_BASELINE_SETTINGS, null, 2)); } catch (_) {}
       }
       const dstC = path.join(BRIDGE_HOME, 'config.json');
-      if (!fs.existsSync(dstC)) { try { fs.copyFileSync(path.join(src, 'config.json'), dstC); } catch (_) {} }
+      if (!fs.existsSync(dstC)) { try { fs.writeFileSync(dstC, '{}'); } catch (_) {} }
     }
-    // CLAUDE_CONFIG_DIR/.claude.json 保存信任/项目元数据。首次从主配置复制(带上对本仓库的信任),
-    // 之后保留桥接自己累积的会话元数据(不覆盖)，每次仅确保本仓库的信任键存在(免去信任弹窗卡住)。
+    // CLAUDE_CONFIG_DIR/.claude.json 保存信任/项目元数据。同样不从 ~/.claude.json 播种——那份带着
+    // 本机所有项目的历史元数据(实测 140KB+)，桥接一个都用不上。只建/保本仓库的信任键，免信任弹窗卡住。
     const dstJson = path.join(BRIDGE_HOME, '.claude.json');
     let j = {};
-    const seed = fs.existsSync(dstJson) ? dstJson : path.join(os.homedir(), '.claude.json');
-    try { j = JSON.parse(fs.readFileSync(seed, 'utf8')); } catch (_) { j = {}; }
+    try { j = JSON.parse(fs.readFileSync(dstJson, 'utf8')); } catch (_) { j = {}; }
     j.projects = j.projects || {};
     const key = REPO.replace(/\\/g, '/');                 // 信任键用正斜杠绝对路径
     const t = j.projects[key] || {};

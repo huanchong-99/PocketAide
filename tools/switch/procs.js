@@ -121,9 +121,19 @@ function restartBridgeSession() {
   const s = scan();
   if (!s.bridgeNode.length) return { ok: false, reason: '桥接未在运行（没找到 node bridge/main.js）' };
   if (!s.bridgeClaude.length) return { ok: true, killed: [], note: '桥接在跑但当前没有 claude 子进程，下次拉起即用新配置' };
-  const killed = [];
-  for (const p of s.bridgeClaude) if (kill(p.pid)) killed.push(p.pid);
-  return { ok: true, killed, note: '桥接会自动重新拉起 claude，届时读入新配置' };
+  // 同 killTerminalSessions：调用者自己那个会话永不杀。正常情况下切换是从托盘/网页/终端发起的，
+  // 调用者不会落在 bridgeClaude 里；但进程归类依赖父子关系(ConPTY 下未必稳)，万一判偏，
+  // "帮你切个供应商"就变成"把正在回话的那个会话干掉"——宁可少杀一个并如实说明。
+  const killed = [], targets = s.bridgeClaude.filter((p) => p.pid !== s.self);
+  const skippedSelf = s.self && s.bridgeClaude.some((p) => p.pid === s.self);
+  for (const p of targets) if (kill(p.pid)) killed.push(p.pid);
+  return {
+    ok: true, killed,
+    skippedSelf: skippedSelf ? s.self : null,
+    note: skippedSelf
+      ? `跳过 pid ${s.self}（调用者自己，不自杀）——这个会话仍在旧配置上，需另行重启才生效`
+      : '桥接会自动重新拉起 claude，届时读入新配置',
+  };
 }
 
 /**

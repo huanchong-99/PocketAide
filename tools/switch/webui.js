@@ -204,11 +204,11 @@ const API = {
   },
 
   /**
-   * 「从本机当前配置复制」：把全局此刻用的那一档照搬成一个供应商档。
-   * 官方订阅这一档不需要重新登录、也不需要填 Key（走已有的 OAuth 凭据）。
+   * 「复制到桥接」：把本机全局配置整份覆盖到桥接那份，第三方连 Key 一起搬、官方就搬成官方直连。
+   * 这是系统里**唯一**会发生复制的地方——桥接首次启动一个字节都不从本机拷（见 bridge/main.js）。
    */
-  async importLocal(b) {
-    const r = await sw.CMDS.import({ _: [], flags: b && b.name ? { name: b.name } : {} });
+  async copyGlobal() {
+    const r = await sw.CMDS['copy-global']({ _: [], flags: {} });
     return { ...r, ...providersView() };
   },
 

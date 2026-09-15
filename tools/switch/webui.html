@@ -56,16 +56,20 @@
   </div>
 
   <div class="row" id="scopes"></div>
+
+  <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <button id="btnImport" style="font-weight:400">把本机全局配置复制到桥接（覆盖）</button>
+    <div class="hint" style="margin:0;flex:1;min-width:280px">
+      让飞书端跟你本机（终端）完全一致：<b>整份覆盖</b>，第三方连 Base URL 和 Key 一起搬，官方订阅则搬成官方直连
+      （<b>不用重新登录</b>，走你已登录的凭据）。覆盖后自动重启桥接会话。<br>
+      <b>两端默认互不干涉</b>——桥接首次启动不会从本机拷任何配置，只有点这里才复制。
+    </div>
+  </div>
+
   <div id="alerts"></div>
   <div id="log"></div>
 
-  <h2 style="display:flex;align-items:center;gap:12px">供应商
-    <button id="btnImport" style="font-weight:400">从本机当前配置复制一档</button>
-  </h2>
-  <div class="hint" style="margin:-6px 0 12px">
-    照搬你本机全局（终端）此刻正在用的那一档。<b>官方订阅无需重新登录、也不用填 Key</b>——它走的是你已登录的凭据。
-    这是手动操作：桥接不会自动继承本机的供应商配置。
-  </div>
+  <h2>供应商</h2>
   <div class="card" style="padding:0"><table id="tbl"><tbody></tbody></table></div>
 
   <h2 id="formTitle">添加供应商</h2>
@@ -317,11 +321,19 @@ async function save(thenCheck) {
 
 $('btnImport').onclick = async () => {
   const b = $('btnImport');
-  b.disabled = true; logClear(); logLine('正在读取本机全局当前配置 …', 'step-dim');
+  b.disabled = true; logClear();
+  logLine('读取本机全局配置 → 覆盖桥接那份 → 重启桥接会话 …', 'step-dim');
   try {
-    const r = await api('importLocal');
-    logLine(`✓ 已复制为「${esc(r.imported)}」${r.official ? '（官方订阅）' : '（' + esc(r.baseUrl) + '）'}　模型 ${esc(r.model || '-')}`, 'step-ok');
+    const r = await api('copyGlobal');
+    logLine(`✓ 已整份覆盖到桥接：${r.official ? '官方直连（订阅）' : esc(r.baseUrl)}　模型 ${esc(r.model || '-')}`, 'step-ok');
     logLine(esc(r.note), 'step-dim');
+    if (r.keptDeny && r.keptDeny.length) {
+      logLine(`保留桥接原有 permissions.deny：${esc(r.keptDeny.join(', '))}（兼容端点加载这些工具会毒掉会话）`, 'step-dim');
+    }
+    const rs = r.restart || {};
+    if (rs.skipped) logLine(`会话未重启：${esc(rs.skipped)}`, 'step-warn');
+    else if (rs.ok === false) logLine(`✗ 会话未重启：${esc(rs.reason)} —— 新配置还没生效`, 'step-bad');
+    else logLine(`✓ ${rs.killed && rs.killed.length ? '已结束桥接会话 ' + rs.killed.join(', ') + '，' : ''}${esc(rs.note || '')}`, 'step-ok');
     await refresh();
   } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
   finally { b.disabled = false; }

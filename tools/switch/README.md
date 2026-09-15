@@ -82,6 +82,7 @@ node tools/switch/switch.js model <模型名> --alias haiku  # 换某个别名�
 node tools/switch/switch.js check <名称>      # 只探活不切
 node tools/switch/switch.js restart          # 不改配置，只让在跑的会话重读
 node tools/switch/switch.js ps               # 看在跑的会话进程
+node tools/switch/switch.js copy-global      # 把本机全局配置整份复制到桥接（覆盖式）
 ```
 
 机器调用一律加 `--json`。
@@ -135,6 +136,43 @@ node tools/switch/switch.js ps               # 看在跑的会话进程
    源码里的中文会乱码，甚至吃掉行尾换行、把下一行静默注释掉。所有中文进 `tray-labels.json`
    （运行时用显式 UTF-8 解码器读），路径一律用 `$PSScriptRoot` 运行时取、不写字面量。
    开发时踩过：测试脚本里写了中文路径字面量，直接变成乱码路径、目录找不到。
+
+## 两端独立：默认零复制，只有一个复制入口
+
+**桥接首次启动时，一个字节都不从本机全局配置拷。** 它只写 `bridge/main.js` 里那份
+`BRIDGE_BASELINE_SETTINGS`（两条：`defaultMode=auto`，`deny WebFetch/WebSearch`），
+供应商和模型一概不写——那是本模块的职责。
+
+这条规矩是踩了两次才立起来的：
+
+1. 最早是**整份复制**全局 `settings.json`。后果：换新机或桥接 home 被删时，
+   若本机当时正配着第三方，那份 Base URL + Key 就被静默继承过去。
+2. 后来改成**剥掉 `ANTHROPIC_*` 再复制**。Key 是不带了，可**拷贝这个行为本身仍然错**——
+   桥接该有什么配置是桥接自己的事，不该取决于"第一次启动那天本机恰好长什么样"。
+
+现在两端天生独立，谁也不偷看谁。想让飞书端跟本机一致，走**唯一的显式入口**：
+
+```bash
+node tools/switch/switch.js copy-global        # 或：托盘「供应商设置…」页面上的按钮
+```
+
+它的语义是**整份覆盖**，不是合并：
+
+- **为什么必须覆盖**——合并同步不了"删除"。本机把 `ANTHROPIC_*` 整组删掉切回官方订阅时，
+  合并式传不过去，桥接就卡在旧供应商上。这正是旧 `bridge/main.js` 犯的错、那次漂移事故的成因。
+- **第三方和官方订阅都能复制**，不做任何剥离：本机配着第三方就连 Base URL + Key 一起搬；
+  本机是官方订阅，搬过去的就是"一个 `ANTHROPIC_*` 都没有"，桥接回到官方直连。
+  **不需要重新登录**——鉴权走 `.credentials.json` 的 OAuth 凭据，桥接每次启动都从本机刷新那一份。
+- **唯一的例外**：复制**第三方**时，桥接原有的 `permissions.deny` 会并回去。
+  理由不是"想保留点什么"，而是某些兼容端点对 `WebSearch`/`WebFetch` 的 `tool_reference`
+  有服务端 bug，一加载就毒掉整个会话；全局那份没有这条 deny（直连官方不受影响），
+  照搬过去等于给桥接埋雷。复制官方配置时不补——那时确实不需要，真·整份覆盖。
+- 覆盖前自动备份（`settings.json.switch-bak-*`，留最近 5 份），覆盖后自动重启桥接会话。
+
+> 代价要知道：覆盖是真覆盖。桥接那份里**本机没有的键会被抹掉**（`deny` 除外）。
+
+**唯一还从本机取的东西是登录凭据**（`.credentials.json`，每次启动刷新）。
+那是登录态不是配置：订阅 token 会轮换，不取最新就会掉登录、逼着在桥接里重新登一次。
 
 ## 与桥接的接线
 

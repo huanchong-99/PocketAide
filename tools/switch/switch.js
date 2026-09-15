@@ -141,29 +141,6 @@ function applyProvider(settings, provider) {
   return s;
 }
 
-/**
- * 桥接首次播种用的净化器：从全局配置派生一份**不含任何供应商信息**的基线。
- *
- * 桥接的 settings.json 首次需要从全局播种一份(为的是继承 hooks / plugins / effort 这些行为设置)，
- * 但**绝不能连供应商一起继承**。整份复制的后果很具体：换新机或桥接 home 被删时，若全局当时正配着
- * 某个第三方端点，桥接就把那份 Base URL + Key 静默捡了过来；此时若还没有 providers.json，
- * syncBridge 不做任何事，于是桥接跑在一个"档案里根本没有"的供应商上，而使用者毫不知情——
- * 正是本模块要根除的那类事故的另一个入口。
- *
- * 所以：env 里的 ANTHROPIC_* 全剥、顶层 model 也剥。桥接用哪个供应商、哪个模型，
- * 只有 tools/switch 的档案说了算。没有档案时回落到 Claude Code 默认(官方订阅)，安全且可预测。
- */
-function sanitizeForBridgeSeed(globalSettings) {
-  const s = { ...globalSettings };
-  if (s.env) {
-    const env = { ...s.env };
-    for (const k of Object.keys(env)) if (isAnthropicKey(k)) delete env[k];
-    if (Object.keys(env).length) s.env = env; else delete s.env;
-  }
-  delete s.model;
-  return s;
-}
-
 /** 落地到某个 scope 的磁盘文件。返回变更摘要，供调用方如实汇报。 */
 function applyToScope(scopeName, provider, { dryRun = false } = {}) {
   const scope = SCOPES[scopeName] || fail(`未知 scope：${scopeName}`);
@@ -691,40 +668,73 @@ const CMDS = {
   },
 
   /**
-   * 把"本机全局此刻正在用的那一档"复制成一个供应商档。
+   * 复制入口：把本机全局配置**整份复制到桥接，覆盖式**。
    *
-   * 这是**显式**动作，不是自动继承——桥接首次播种一律剥掉供应商信息(见 sanitizeForBridgeSeed)，
-   * 免得静默跑在一个档案里没有的供应商上。但人确实常需要"我全局已经配好了，照搬一份过来"，
-   * 所以给一个手动入口。
+   * 【为什么是唯一的复制入口】桥接首次启动时**一个字节都不从本机拷**（见 bridge/main.js，
+   * 只写它自己的最小基线）。两端天生独立，谁也不偷看谁——静默继承正是当初那次漂移事故的温床。
+   * 想让飞书端跟本机保持一致，就点这一下；不点，永远不会自己发生。
    *
-   * 官方订阅这一档**不需要重新登录**：它的定义就是"一个 ANTHROPIC_* 都不写"，
-   * 鉴权走 ~/.claude/.credentials.json 的 OAuth 凭据，而那份凭据桥接每次启动都会从全局刷新。
+   * 【为什么是覆盖不是合并】合并没法同步"删除"：本机把 ANTHROPIC_* 整组删掉切回官方订阅，
+   * 合并式同步传不过去，桥接就卡在旧供应商上——这正是旧 bridge/main.js 犯的错。
+   * 整份覆盖则天然正确：本机什么样，桥接就什么样，多一个键少一个键都跟着走。
+   *
+   * 【第三方和官方订阅都能复制】不做任何剥离：
+   *   - 本机配着第三方 → Base URL + Key + 模型一起搬过去，桥接立刻用同一家；
+   *   - 本机是官方订阅 → 搬过去的就是"一个 ANTHROPIC_* 都没有"，桥接回到官方直连。
+   *     **不需要重新登录**：鉴权走 OAuth 凭据文件，桥接每次启动都从本机刷新那一份。
+   *
+   * 唯一的例外见下面 deny 那段。复制完照例重启会话，否则又是只改文件的假生效。
    */
-  async import(a) {
-    const glb = readJson(SCOPES.global.settings, null) || fail(`读不到 ${SCOPES.global.settings}`);
-    const env = Object.fromEntries(Object.entries(glb.env || {}).filter(([k]) => isAnthropicKey(k)));
-    const official = !env.ANTHROPIC_BASE_URL;
-    const name = a.flags.name || a._[0] || (official ? 'official' : guessName(env.ANTHROPIC_BASE_URL));
-    const store = readJson(STORE, { current: null, providers: {} });
-    const prev = store.providers[name] || {};
+  async 'copy-global'(a) {
+    const glb = readJson(SCOPES.global.settings, null) || fail(`读不到本机全局配置 ${SCOPES.global.settings}`);
+    const dst = SCOPES.bridge.settings;
+    const before = readJson(dst, null);
 
-    store.providers[name] = official
-      ? { label: a.flags.label || prev.label || 'Anthropic 官方（订阅 / OAuth，无需重新登录）',
-          official: true, model: glb.model || 'opus[1m]', env: {},
-          catalog: Array.from(new Set([...(prev.catalog || []), glb.model || 'opus[1m]', 'opus', 'sonnet', 'haiku'])) }
-      : { label: a.flags.label || prev.label || `${name}（从本机全局配置复制）`,
-          model: env.ANTHROPIC_MODEL || glb.model || null, env,
-          catalog: Array.from(new Set([...(prev.catalog || []), env.ANTHROPIC_MODEL].filter(Boolean))) };
+    const next = JSON.parse(JSON.stringify(glb));   // 整份，不剥离任何东西
 
-    if (!store.current) store.current = name;
-    saveStore(store);
+    // 唯一的例外：桥接原有的 permissions.deny 在**复制第三方**时并回去。
+    // 理由不是"我想保留点什么"，而是兼容端点对 WebSearch/WebFetch 的 tool_reference 有服务端 bug，
+    // 一加载就毒掉整个会话。全局那份没有这条 deny（直连官方不受影响），覆盖过去等于给桥接埋雷。
+    // 复制官方配置时不补——那时候确实不需要，真·整份覆盖。
+    const toThirdParty = !!((next.env || {}).ANTHROPIC_BASE_URL);
+    const keptDeny = [];
+    if (toThirdParty) {
+      const old = ((before || {}).permissions || {}).deny || [];
+      const cur = new Set((next.permissions || {}).deny || []);
+      for (const d of old) if (!cur.has(d)) { cur.add(d); keptDeny.push(d); }
+      if (cur.size) next.permissions = { ...(next.permissions || {}), deny: [...cur] };
+    }
+
+    if (a.flags['dry-run']) {
+      return { dryRun: true, target: dst, official: !toThirdParty, keptDeny,
+               baseUrl: (next.env || {}).ANTHROPIC_BASE_URL || null,
+               model: (next.env || {}).ANTHROPIC_MODEL || next.model || null };
+    }
+
+    writeJsonAtomic(dst, next);   // 备份旧的那份再原子覆盖
+
+    // 档案库的 current 跟着实际状态走，别让体检和托盘显示一个过期的档名。
+    let matched = null;
+    try {
+      const store = readJson(STORE, null);
+      if (store) {
+        matched = matchProvider(store, readScopeState('bridge'));
+        store.current = matched;            // 认不出就置 null = "手工态/从本机复制"
+        saveStore(store);
+      }
+    } catch (_) {}
+
+    const restart = a.flags['no-restart'] ? { skipped: '按 --no-restart 要求未重启' } : procs.restartBridgeSession();
+
     return {
-      imported: name, official,
-      model: store.providers[name].model,
-      baseUrl: env.ANTHROPIC_BASE_URL || null,
-      note: official
-        ? '官方订阅档：鉴权走已登录的 OAuth 凭据，无需重新登录，也不需要填 Key'
-        : '已连同 Base URL 与 Key 一起复制',
+      copied: true, target: dst, official: !toThirdParty,
+      baseUrl: (next.env || {}).ANTHROPIC_BASE_URL || null,
+      model: (next.env || {}).ANTHROPIC_MODEL || next.model || null,
+      withKey: Object.keys(next.env || {}).some((k) => /TOKEN|API_KEY/i.test(k)),
+      keptDeny, matchedProvider: matched, restart,
+      note: toThirdParty
+        ? '已连同 Base URL 与 Key 整份搬到桥接'
+        : '官方订阅：桥接回到官方直连，鉴权走已登录的 OAuth 凭据，无需重新登录',
     };
   },
 
@@ -794,6 +804,14 @@ function render(cmd, r) {
     if (r.restart) L.push(...renderRestart(r.restart));
   } else if (cmd === 'restart') {
     L.push(...renderRestart(r));
+  } else if (cmd === 'copy-global') {
+    L.push(r.dryRun ? '[预演，未落盘] 将把本机全局配置整份覆盖到桥接：' : '已把本机全局配置整份复制到桥接（覆盖）：');
+    L.push(`  端点   ${r.baseUrl || '官方直连 (订阅)'}`);
+    L.push(`  模型   ${r.model || '(未指定)'}`);
+    L.push(`  Key    ${r.withKey ? '已一并复制' : '无（官方订阅走 OAuth 凭据，不用重新登录）'}`);
+    if (r.keptDeny && r.keptDeny.length) L.push(`  保留   桥接原有 permissions.deny：${r.keptDeny.join(', ')}（兼容端点加载这些工具会毒会话）`);
+    if (!r.dryRun) L.push(`  档案   ${r.matchedProvider ? `认出是「${r.matchedProvider}」` : '不对应任何已知档案（手工态）'}`);
+    if (r.restart) L.push(...renderRestart({ bridge: r.restart }));
   } else if (cmd === 'ps') {
     L.push(`调用者自身 claude pid：${r.self || '(未知)'}`);
     const sec = (t, arr) => { L.push(`${t}：${arr.length ? '' : '无'}`); for (const p of arr) L.push(`  pid ${p.pid}${p.self ? '  ← 就是我，永不杀' : ''}`); };
@@ -821,7 +839,7 @@ async function main() {
       '供应商 / 模型切换底座',
       '',
       '  init [--force]                                从现有配置播种档案',
-      '  import [名称] [--label <说明>]                把本机全局当前那一档复制成供应商档',
+      '  copy-global [--dry-run] [--no-restart]        把本机全局配置整份复制到桥接（覆盖式，含第三方 Key）',
       '  list                                          列出所有供应商',
       '  status                                        双端体检：配置 vs 实跑 vs 漂移告警',
       '  use <名称>                                    切换（先探活→再落盘→再重启，顺序不可调）',
@@ -858,6 +876,6 @@ if (require.main === module) {
 // CMDS / parseArgs 一并导出：Web UI 直接复用同一套命令实现，绝不另写一份——
 // 两个入口走不同代码路径，迟早会出现"CLI 切了、页面显示没切"这类对不上的行为。
 module.exports = {
-  syncBridge, applyProvider, sanitizeForBridgeSeed, modelMatches, buildStatus, detectLive,
+  syncBridge, applyProvider, modelMatches, buildStatus, detectLive,
   loadStore, saveStore, checkProvider, CMDS, parseArgs, SCOPES, STORE,
 };
