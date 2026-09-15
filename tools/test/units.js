@@ -176,6 +176,80 @@ test('U6 数据安全 autocommit 钩子已接 + git 健康', () => {
   console.log('        (git 历史提交数=' + count + '; 钩子行为级验证: 改动→自动新提交 ✓)');
 });
 
+// ===== U7 供应商切换底座：两条不变量 + 两条进程安全底线 =====
+// 这组测试钉死的是一次真实事故：bridge 旧同步逻辑"只覆盖不删除"，让终端跑官方模型、
+// 飞书跑第三方模型连续数周无人察觉。详见 tools/switch/README.md。
+// 全部用纯函数 + 假数据，不碰用户真实配置、不动任何进程。
+test('U7 switch 不变量①: 落地前删净所有 ANTHROPIC_*(切回官方不留残影)', () => {
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  // 复刻当时的故障态: 卡在旧的第三方供应商, 还压着更早一家的残留
+  const dirty = {
+    model: 'vendor-b-old',
+    hooks: { keep: 1 },
+    env: {
+      ANTHROPIC_BASE_URL: 'https://api.vendor-a.test/anthropic',
+      ANTHROPIC_AUTH_TOKEN: 'sk-fake-for-test',
+      ANTHROPIC_MODEL: 'vendor-a-pro',
+      ANTHROPIC_REASONING_MODEL: 'vendor-b-reasoning',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
+    },
+  };
+  const out = sw.applyProvider(dirty, { official: true, model: 'opus[1m]', env: {} });
+  const left = Object.keys(out.env || {}).filter((k) => k.startsWith('ANTHROPIC_'));
+  assert(left.length === 0, '切回官方后仍残留 ANTHROPIC_*: ' + left.join(','));
+  assert(out.env.CLAUDE_CODE_EFFORT_LEVEL === 'max', '误删了非供应商 env');
+  assert(out.hooks && out.hooks.keep === 1, '误伤了 env 以外的字段');
+  assert(out.model === 'opus[1m]', '顶层 model 未对齐: ' + out.model);
+});
+
+test('U7 switch 不变量②: 顶层 model 与 ANTHROPIC_MODEL 永远一致', () => {
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  // 旧顶层 model 是过期的上一家模型名, 落地新供应商后必须被覆盖, 不能两者打架
+  const out = sw.applyProvider({ model: 'vendor-b-old', env: {} }, {
+    model: 'x-pro', env: { ANTHROPIC_BASE_URL: 'https://x.test/anthropic', ANTHROPIC_MODEL: 'x-pro' },
+  });
+  assert(out.model === out.env.ANTHROPIC_MODEL, `自相矛盾: 顶层=${out.model} env=${out.env.ANTHROPIC_MODEL}`);
+});
+
+test('U7 switch 体检不误报: 别名与实跑模型归一', () => {
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  assert(sw.modelMatches('opus[1m]', 'claude-opus-5'), '别名 opus[1m] 应认得 claude-opus-5');
+  assert(sw.modelMatches('vendor-a-flash[1M]', 'vendor-a-flash'), '[1M] 上下文后缀应被剥离');
+  assert(!sw.modelMatches('vendor-a-pro', 'vendor-b-old'), '真正的不一致必须报出来');
+});
+
+test('U7 procs 安全①: 绝不把 Claude 桌面应用当成 CLI', () => {
+  const procs = require(path.join(REPO, 'tools', 'switch', 'procs.js'));
+  const desktop = [
+    '"C:\\Program Files\\WindowsApps\\Claude_1.52386.6.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe" ',
+    '"C:\\Program Files\\WindowsApps\\Claude_1.5\\app\\Claude.exe" --type=renderer --user-data-dir="C:\\x"',
+    '"C:\\Program Files\\WindowsApps\\Claude_1.5\\app\\Claude.exe" --type=crashpad-handler',
+  ];
+  for (const cmd of desktop) assert(!procs.isClaudeCodeCli({ cmd }), '桌面应用被误判为 CLI(会被杀): ' + cmd.slice(0, 60));
+  assert(procs.isClaudeCodeCli({ cmd: '"C:\\Users\\X\\.local\\bin\\claude.exe" --dangerously-skip-permissions' }),
+    '真正的 Claude Code CLI 被误排除');
+});
+
+test('U7 procs 安全②: 扫描结果标出调用者自身, 且不含桌面应用', () => {
+  const procs = require(path.join(REPO, 'tools', 'switch', 'procs.js'));
+  const s = procs.scan();     // 只读, 不杀任何进程
+  for (const p of [...s.terminalClaude, ...s.bridgeClaude]) {
+    assert(procs.isClaudeCodeCli(p), '扫描结果混入非 CLI 进程 pid=' + p.pid);
+  }
+  if (process.env.CLAUDE_PID) {
+    assert(s.self === Number(process.env.CLAUDE_PID), 'self 应取自 CLAUDE_PID, 用于永不自杀');
+  }
+});
+
+test('U7 switch status 可跑、只读、两端齐全', () => {
+  const out = execFileSync('node', ['tools/switch/switch.js', 'status', '--json'], { cwd: REPO, encoding: 'utf8' });
+  const j = JSON.parse(out);
+  assert(Array.isArray(j.scopes) && j.scopes.length === 2, 'status 应覆盖全局+桥接两端');
+  assert(j.scopes.some((s) => s.scope === 'global') && j.scopes.some((s) => s.scope === 'bridge'), '两端 scope 名不对');
+  assert(Array.isArray(j.warnings), 'status 应给出告警数组');
+  console.log('        (当前档=' + j.current + '; 告警 ' + j.warnings.length + ' 条)');
+});
+
 // ---- 收尾 ----
 rmrfDir(TMP);
 

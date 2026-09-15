@@ -13,6 +13,11 @@ const single = require('./lib/single-instance');
 const { loadEnv, validate } = require('./lib/config');
 const { Feishu, extractText, extractImage } = require('./lib/feishu');
 const { PtyClaude } = require('./lib/pty-claude');
+// 供应商/模型切换底座。它决定桥接这端用哪个供应商跑，在每次拉起 claude 前落地配置。
+// 用 try 包住：它是底座没错，但底座自己坏了也不该让整个桥接起不来——拿不到就沿用现有 settings。
+let providerSwitch = null;
+try { providerSwitch = require('../tools/switch/switch'); }
+catch (e) { console.error('[warn] 供应商切换器加载失败，沿用桥接现有 settings：', e && e.message); }
 
 const REPO = path.join(__dirname, '..');
 const HEADER = 'AI参谋';
@@ -265,27 +270,16 @@ function prepareConfigHome() {
     // 凭据每次都从全局刷新：Max token 会轮换, 不取最新会掉登录, 故凭据始终以全局为准。
     try { fs.copyFileSync(path.join(src, '.credentials.json'), path.join(BRIDGE_HOME, '.credentials.json')); } catch (_) {}
     // settings.json / config.json：本地优先、全局兜底。本地已存在就保留(桥接自己决定 effort 等行为,
-    // 不再被全局覆盖)；本地不存在才从全局播种一次。
-    // 但 settings.json 里的 ANTHROPIC_* 供应商相关 env 必须每次从全局同步——否则用户切换全局供应商
-    // (改 ~/.claude/settings.json 的 ANTHROPIC_BASE_URL/AUTH_TOKEN/MODEL 等)后，桥接这份永不更新、
-    // 切不过去(实测坑:旧值留着 + .credentials.json 每次刷新的 OAuth 凭据，合力把请求推回旧供应商/官方订阅)。
-    // 其它字段(hooks/plugins/effort 等)仍本地优先；config.json 也仍本地优先、播种一次。
+    // 不再被全局覆盖)；本地不存在才从全局播种一次。config.json 同理。
+    //
+    // ⚠️ 供应商相关的 ANTHROPIC_* **不在这里处理**，交给 tools/switch 在每次拉起 claude 前统一落地。
+    // 这里原本有一段"把全局的 ANTHROPIC_* 覆盖到桥接这份"的同步，只覆盖、不删除——使用者后来把全局
+    // ANTHROPIC_* 整组删掉切回官方订阅时，删除同步不过去，桥接就卡在旧供应商上：实测曾连续数周
+    // 终端跑官方模型、飞书跑第三方模型而无人察觉。详见 tools/switch/README.md。
     {
       const dstS = path.join(BRIDGE_HOME, 'settings.json');
       const srcS = path.join(src, 'settings.json');
-      if (fs.existsSync(dstS) && fs.existsSync(srcS)) {
-        try {
-          const cur = JSON.parse(fs.readFileSync(dstS, 'utf8'));
-          const glb = JSON.parse(fs.readFileSync(srcS, 'utf8'));
-          if (glb.env) {
-            cur.env = cur.env || {};
-            for (const k of Object.keys(glb.env)) if (k.startsWith('ANTHROPIC_')) cur.env[k] = glb.env[k];
-          }
-          fs.writeFileSync(dstS, JSON.stringify(cur, null, 2));
-        } catch (_) {}
-      } else if (!fs.existsSync(dstS)) {
-        try { fs.copyFileSync(srcS, dstS); } catch (_) {}
-      }
+      if (!fs.existsSync(dstS)) { try { fs.copyFileSync(srcS, dstS); } catch (_) {} }
       const dstC = path.join(BRIDGE_HOME, 'config.json');
       if (!fs.existsSync(dstC)) { try { fs.copyFileSync(path.join(src, 'config.json'), dstC); } catch (_) {} }
     }
@@ -542,6 +536,17 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
   // 全新会话。返回 { ok, resumed }。首次成功开全新会话时落 marker，此后重启一律走 -c。
   async function startClaude(preferResume) {
     starting = true;
+    // 供应商配置只在这一刻生效：Claude Code 启动时读一次 settings.json，之后不再热加载。
+    // 所以每次拉起 claude 前都重新落地当前选定的供应商——切换器因此只需杀掉 claude 子进程、
+    // 让它在这里重启，就能换供应商，不必重启整个桥接(飞书那端不掉线、会话靠 -c 续上)。
+    // 切换器坏了绝不能拖垮桥接：整段包 try，失败只记日志、照常启动。
+    try {
+      const r = providerSwitch && providerSwitch.syncBridge();
+      if (!r) log('供应商切换器不可用，沿用桥接现有 settings。');
+      else if (r.ok) log(`供应商已落地: ${r.provider} / ${r.model || '(未指定模型)'}` +
+        (r.changed ? ` [有变更 +${r.added.length} -${r.removed.length}]` : ' [无变更]'));
+      else log('供应商未落地:', r.reason);
+    } catch (e) { log('供应商落地异常(不阻断启动):', e && e.message); }
     try {
       if (preferResume) {
         claude.continueLast = true; claude.resumeId = null; claude.sessionId = null;

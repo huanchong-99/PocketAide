@@ -49,7 +49,7 @@
 | `tasks/reminders/` | 定时提醒脚本/记录 | 提醒功能写 |
 | `workspace/` | 助理杂活产物 | 自由写（仅此处） |
 | `bridge/` | 飞书长连接 + 伪终端桥（Node） | 工程代码 |
-| `tools/` | kg 等本地工具 | 工程代码 |
+| `tools/` | kg / switch 等本地工具 | 工程代码 |
 | `.claude/` | 本配置（CLAUDE.md 在根、settings/hooks/skills 在此） | 工程代码 |
 
 > **绝对禁止**操作本仓库根目录以外的任何路径；本仓库是唯一默认活动范围。
@@ -86,6 +86,29 @@ python tools/kg/kg.py overview [--tag <标签>]      # 计数概览 total_nodes/
 - **写入知识后**：跑 `index --file`（单篇）或最后 `index --all`（多篇），确认 stdout JSON 的 `indexed`。
 - **查询**：基于命中的 `title/snippet/source` 回答；**score + snippet 双重判断**（bge-m3 无关查询也可能得 0.45~0.55，真命中通常 ≥0.7）——分数普遍 < 0.45、为空、或 snippet 明显无关 → 如实告知知识库边界，**绝不编造**。
 - 节点用 frontmatter `type: knowledge|task` 区分。具体调用规则见各 skill 的 SKILL.md。
+
+## 供应商 / 模型切换（底座，非 skill）
+
+这套系统用哪个供应商、哪个模型跑，由 `tools/switch` 管（**基础设施，不是技能**——它在桥接启动时就参与工作，`bridge/main.js` 每次拉起 claude 前都会调它落地配置）。它管**两端**：全局 `~/.claude/settings.json`（终端会话）+ `bridge/.claude-home/settings.json`（飞书会话）。
+
+```bash
+node tools/switch/switch.js status --json     # 双端体检: 配置 vs 实跑 vs 漂移告警
+node tools/switch/switch.js list --json       # 列供应商
+node tools/switch/switch.js use <名称>         # 切换(自动: 探活→落盘→重启)
+node tools/switch/switch.js model <模型名>     # 换模型(可带 --alias opus|sonnet|haiku|reasoning)
+node tools/switch/switch.js check <名称>       # 只探活不切
+node tools/switch/switch.js restart           # 不改配置, 只让在跑的会话重读
+```
+
+用户问"现在用的什么模型 / 哪个配置"**一律先跑 `status`**，别靠读配置文件猜——配置文件写的和实跑的可能不一样（真出过事，见下）。`status` 会从会话存档反查实跑模型，两端不一致会直接告警。
+
+**三条必须知道的事实**：
+
+1. **切换只改文件是假生效**。Claude Code 只在**启动时读一次** settings，跑着的会话不会热加载。`use` 已内建"杀掉会话让它重启"；桥接端自动重启（飞书不掉线），终端端默认只提示、要真杀得加 `--kill-terminals`（调用者自己那个会话**永不被杀**）。
+2. **切换前必探活**。切过去才发现不通 = 整套系统当场瘫痪。`use` 默认先 `check`，不通就拒绝切（确认无误可 `--force`）。
+3. **`providers.json` 含真实 Key，已 gitignore，绝不入库**；入库的是脱敏的 `providers.example.json`。别把 Key 写进任何会提交的文件。
+
+> 为什么要有这个模块：`bridge/main.js` 旧的同步逻辑只覆盖不删除，导致连续数周里终端跑官方模型、飞书跑第三方模型，使用者全程不知情。完整复盘见 `tools/switch/README.md`。
 
 ## 联网搜索（硬要求）
 

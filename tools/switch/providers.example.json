@@ -1,0 +1,28 @@
+{
+  "current": "official",
+  "providers": {
+    "official": {
+      "label": "Anthropic 官方（订阅 / OAuth）",
+      "official": true,
+      "model": "opus[1m]",
+      "env": {},
+      "catalog": ["opus[1m]", "opus", "sonnet", "haiku"]
+    },
+    "example-vendor": {
+      "label": "某第三方 Anthropic 兼容端点（把这一档改成你自己的）",
+      "model": "<主模型名>",
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.example.com/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "<你的 ANTHROPIC_AUTH_TOKEN>",
+        "ANTHROPIC_MODEL": "<主模型名>",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "<映射到 opus 档位的模型名>",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "<同上>",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "<映射到 sonnet 档位的模型名>",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "<同上>",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<映射到 haiku 档位的模型名>",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "<同上>"
+      },
+      "catalog": ["<主模型名>", "<备选模型名>"]
+    }
+  }
+}

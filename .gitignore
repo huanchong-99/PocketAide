@@ -7,6 +7,10 @@ embeddings/
 # 飞书凭据 —— 绝不入库
 bridge/.env
 
+# 供应商档案 —— 含各家 API Key（ANTHROPIC_AUTH_TOKEN 等），绝不入库。
+# 入库的是同目录的 providers.example.json（密钥已换成占位符）。
+tools/switch/providers.json
+
 # 桥接运行期文件
 bridge/.bridge.lock
 bridge/.bridge-ran
