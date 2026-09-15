@@ -520,6 +520,20 @@ test('U9 双端联动: 面板改动会投递事件, 提示词只许播报不许�
   assert(/panelEvents\.clear\(evts\)/.test(main), '事件没有在处理后清除, 会无限重播同一批');
 });
 
+test('U9 面板布局: 网格轨道一律 minmax(0,1fr), 不许裸 1fr', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  // 栽过两次的同一个坑: `1fr` 展开是 minmax(auto,1fr), 下限是内容最小宽度。卡片里那条
+  // white-space:nowrap 的「下一步」会把列顶到比视口还宽, 整页横向溢出、右边的列被挤出屏幕。
+  // 第一次是桌面四列, 修完之后我又在窄屏断点里原样写了一遍。所以改成规则挡住。
+  const bad = [];
+  for (const m of html.matchAll(/grid-template-columns\s*:\s*([^;}\n]+)/g)) {
+    const val = m[1];
+    // 把所有 minmax(...) 抠掉, 剩下的里再出现 1fr 就是裸的
+    if (/\b[\d.]*fr\b/.test(val.replace(/minmax\([^)]*\)/g, ''))) bad.push(val.trim());
+  }
+  assert(bad.length === 0, '这些网格声明用了裸 fr 轨道(会被内容撑破): ' + JSON.stringify(bad));
+});
+
 test('U9 面板编辑: 重写下一步计划不破坏文件, 且能识别"没变化"', () => {
   const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
   const src = ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
