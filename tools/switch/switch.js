@@ -227,12 +227,16 @@ function detectLive(scopeName) {
 
   for (const { fp, mtime } of files.slice(0, 3)) {       // 最近 3 份足够，再旧的没有参考价值
     const hit = lastModelInFile(fp);
-    if (hit) return { model: hit, at: new Date(mtime).toISOString(), file: fp };
+    if (!hit) continue;
+    // 时间取那条记录自己的 timestamp，不能用文件 mtime：`-c` 续接会在新会话起来后立刻往同一个
+    // jsonl 追加内容，mtime 因此比进程还新，据它判断"重启过没有"必然失效。
+    const atMs = hit.ts || mtime;
+    return { model: hit.model, at: new Date(atMs).toISOString(), atMs, file: fp };
   }
   return null;
 }
 
-/** 从文件尾部往前找最后一条带 model 的记录。只读尾部 512KB。 */
+/** 从文件尾部往前找最后一条带 model 的记录，返回 { model, ts }。只读尾部 512KB。 */
 function lastModelInFile(file) {
   const TAIL = 512 * 1024;
   let buf;
@@ -250,12 +254,29 @@ function lastModelInFile(file) {
     if (!l.includes('"model"')) continue;
     let o; try { o = JSON.parse(l); } catch (_) { continue; }
     const m = (o.message && o.message.model) || o.model;
-    if (m && m !== '<synthetic>') return m;
+    if (m && m !== '<synthetic>') {
+      const t = Date.parse(o.timestamp || '');
+      return { model: m, ts: Number.isFinite(t) ? t : null };
+    }
   }
   return null;
 }
 
 // ---------------------------------------------------------------- 体检
+
+/**
+ * 该端当前会话进程的启动时刻（毫秒）。用来区分两种看起来一样、后果完全不同的状态：
+ *   "改了配置但没重启"(真故障) vs "已重启、只是还没人说过话所以没有新记录"(正常)。
+ * 拿不到就返回 null，此时按保守口径当作未重启。
+ */
+function sessionStartedAt(scopeName) {
+  try {
+    const s = procs.scan();
+    const list = scopeName === 'bridge' ? s.bridgeClaude : s.terminalClaude;
+    const times = list.map((p) => p.startedAt).filter((t) => typeof t === 'number');
+    return times.length ? Math.max(...times) : null;
+  } catch (_) { return null; }
+}
 
 function readScopeState(scopeName) {
   const scope = SCOPES[scopeName];
@@ -276,6 +297,7 @@ function readScopeState(scopeName) {
     envModel: env.ANTHROPIC_MODEL || null,
     anthropicKeys: Object.keys(anth).sort(),
     live: detectLive(scopeName),
+    sessionStartedAt: sessionStartedAt(scopeName),
   };
 }
 
@@ -326,9 +348,14 @@ function buildStatus() {
     if (s.envModel && s.settingsModel && s.envModel !== s.settingsModel) {
       warnings.push(`${s.label} 配置自相矛盾：顶层 model=${s.settingsModel}，但 ANTHROPIC_MODEL=${s.envModel}（实际以后者为准）`);
     }
-    // 配置说一套、实跑另一套
+    // 配置说一套、实跑另一套。但"实跑"读的是最后一条会话记录，重启后若还没人说过话，
+    // 它仍是上个会话留下的旧值——此时报"尚未重启"会把已经生效的状态说成故障。
+    // 故先看会话进程是不是在那条记录之后才起来的：是 => 已重启、只是还没新记录，不算故障。
     if (s.live && s.configuredModel && !modelMatches(s.configuredModel, s.live.model)) {
-      warnings.push(`${s.label} 配置=${s.configuredModel}，但最近一次实跑=${s.live.model}（该端可能尚未重启生效）`);
+      const startedAfter = s.sessionStartedAt && s.live.atMs && s.sessionStartedAt > s.live.atMs;
+      if (!startedAfter) {
+        warnings.push(`${s.label} 配置=${s.configuredModel}，但最近一次实跑=${s.live.model}（该端尚未重启，配置还没生效）`);
+      }
     }
     if (s.official && s.anthropicKeys.length) {
       warnings.push(`${s.label} 声称官方直连，却残留 ${s.anthropicKeys.length} 个 ANTHROPIC_* 键：${s.anthropicKeys.join(', ')}`);
@@ -734,7 +761,10 @@ function render(cmd, r) {
       if (!s.exists) { L.push('  配置文件不存在'); continue; }
       L.push(`  端点     ${s.baseUrl || '官方直连 (Max 订阅)'}`);
       L.push(`  配置模型 ${s.configuredModel || '(未指定)'}${s.provider ? `   [档案: ${s.provider}]` : ''}`);
-      L.push(`  实跑模型 ${s.live ? `${s.live.model}   (最近活动 ${s.live.at})` : '(无会话记录)'}`);
+      const restarted = s.live && s.sessionStartedAt && s.live.atMs && s.sessionStartedAt > s.live.atMs;
+      const stale = s.live && s.configuredModel && !modelMatches(s.configuredModel, s.live.model);
+      L.push(`  实跑模型 ${s.live ? `${s.live.model}   (最近活动 ${s.live.at})` : '(无会话记录)'}` +
+        (stale && restarted ? '   ← 会话已按新配置重启，下次对话即按新配置运行' : ''));
       if (s.anthropicKeys.length) L.push(`  ANTHROPIC_* ${s.anthropicKeys.length} 个：${s.anthropicKeys.join(', ')}`);
     }
     if (r.warnings.length) { L.push(''); L.push('⚠ 告警'); for (const w of r.warnings) L.push(`  - ${w}`); }

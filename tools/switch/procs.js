@@ -51,7 +51,7 @@ function scan() {
     ppid: Number(r.ParentProcessId),
     name: String(r.Name || '').toLowerCase(),
     cmd: String(r.CommandLine || ''),
-    startedAt: r.CreationDate || null,
+    startedAt: parseCimDate(r.CreationDate),   // 毫秒时间戳；拿不到则 null
   }));
 
   const bridgeNode = all.filter((p) => p.name === 'node.exe' && /bridge[\\/]main\.js/i.test(p.cmd) && repoRe.test(p.cmd));
@@ -88,6 +88,15 @@ function selfPid() {
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** ConvertTo-Json 把 CIM 日期序列化成 "/Date(1789488079899)/"，取出毫秒时间戳。 */
+function parseCimDate(v) {
+  if (!v) return null;
+  const m = /\/Date\((\d+)/.exec(String(v));
+  if (m) return Number(m[1]);
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+}
 
 /** 杀进程树。/T 带上子进程（claude 会拉起 mcp 子进程），/F 强杀。返回是否已不存在。 */
 function kill(pid) {
