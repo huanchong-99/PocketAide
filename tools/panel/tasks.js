@@ -246,6 +246,16 @@ function daysLeft(t, now = new Date()) {
   return Math.round((startOfDay(new Date(dl)) - startOfDay(now)) / 864e5);
 }
 
+const SEARCH_MAX = 1500;
+
+/** 拼一份可搜索的小写正文（标题 + 项目 + 说明 + 进度 + 下一步），截断后随视图下发。 */
+function searchBlob(t) {
+  const parts = [t.title || t.name, t.name, t.fm.project || '', t.intro.join(' ')];
+  for (const x of t.progress.items) parts.push(x.text || x.raw);
+  for (const x of t.next.items) parts.push(x.raw);
+  return parts.join(' ').replace(/\s+/g, ' ').slice(0, SEARCH_MAX).toLowerCase();
+}
+
 /** 交给前端的扁平视图。绝不把 raw 全文塞进去——列表页只要摘要。 */
 function toView(t, now = new Date()) {
   return {
@@ -264,6 +274,9 @@ function toView(t, now = new Date()) {
     daysLeft: daysLeft(t, now),
     progressCount: t.progress.items.length,
     nextFirst: t.next.items.length ? t.next.items[0].raw.replace(/^\s*-\s*/, '').split('\n')[0] : '',
+    // 搜索用的小写全文。只搜标题等于搜不到——想找"那个提到 DevHub 的任务"时，
+    // 关键词几乎总在进度里，而不在标题里。截断是为了别让 /api/state 被归档区撑大。
+    haystack: searchBlob(t),
     links: [...new Set((JSON.stringify(t.intro) + JSON.stringify(t.next.items) + JSON.stringify(t.progress.items))
       .match(/\[\[([^\]]+)\]\]/g) || [])].map((s) => s.slice(2, -2)),
   };
@@ -312,6 +325,44 @@ function setFields(t, patch, when = new Date()) {
     }
   }
   return changed;
+}
+
+/**
+ * 重写「下一步计划」。
+ *
+ * 卡片正面推的就是这一条（`→ xxx`），它却一直只能看不能改——想调整下一步得去改文件，
+ * 那这个面板就只完成了一半。整段替换而不是逐条编辑：计划本来就是随手重写的东西，
+ * 逐条增删反而啰嗦。原有的缩进子条目会被这次重写覆盖掉，所以前端要把原文回填进输入框。
+ */
+function setNext(t, lines) {
+  const items = String(lines == null ? '' : lines)
+    .split('\n').map((x) => x.replace(/^\s*[-*]\s*/, '').trimEnd()).filter((x) => x.trim());
+  const before = t.next.items.map((x) => x.raw.replace(/^\s*-\s*/, '')).join('\n');
+  const after = items.join('\n');
+  if (before === after) return null;
+  if (!t.hasNext) { t.hasNext = true; t.next = { items: [], lead: [], trail: [] }; }
+  t.next.items = items.map((x) => ({ raw: '- ' + x }));
+  return { from: before, to: after };
+}
+
+/**
+ * 归档：把任务从 active 移到 archive。
+ *
+ * 只允许 done / cancelled —— CLAUDE.md 的安全底线是"未完成任务绝不删除/归档"，
+ * 这条底线不因为多了个网页按钮就松动。归档只移动文件、不删内容（真正的删详情留摘要
+ * 是 tools/tasks/archive.py 到期后干的事，那是另一条路）。
+ */
+function archive(t) {
+  const st = t.fm.status || '';
+  if (st !== 'done' && st !== 'cancelled') throw new Error('只有已完成/已取消的任务才能归档');
+  if (t.bucket === 'archive') throw new Error('任务已在归档区');
+  try { fs.mkdirSync(ARCHIVE, { recursive: true }); } catch (_) {}
+  const dest = path.join(ARCHIVE, t.name + '.md');
+  if (fs.existsSync(dest)) throw new Error(`归档区已有同名任务：${t.name}`);
+  fs.renameSync(t.file, dest);
+  t.file = dest;
+  t.bucket = 'archive';
+  return dest;
 }
 
 /** 新建任务。文件名即标识，冲突直接拒绝——绝不覆盖已有任务。 */
@@ -442,8 +493,8 @@ function splitCjk(w) {
 }
 
 module.exports = {
-  parse, serialize, loadAll, loadOne, save, create,
-  toView, toDetail, appendProgress, setFields,
+  parse, serialize, loadAll, loadOne, save, create, archive,
+  toView, toDetail, appendProgress, setFields, setNext,
   lastActivity, staleDays, daysLeft, healthCheck, findDuplicates,
   stamp, ACTIVE, ARCHIVE, STATUSES, HORIZONS, PRIORITIES, FM_ORDER, STALE_DAYS,
 };

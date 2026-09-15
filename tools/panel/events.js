@@ -103,6 +103,8 @@ function describe(e) {
     case 'status': return `「${t}」状态 ${e.from || '—'} → ${e.to}`;
     case 'progress': return `给「${t}」补了一条进度：${truncate(e.text, 60)}`;
     case 'fields': return `改了「${t}」的${(e.changes || []).map((c) => `${fieldName(c.field)}（${c.from || '空'}→${c.to || '空'}）`).join('、')}`;
+    case 'next': return `改了「${t}」的下一步计划：${truncate(e.to, 60) || '（清空）'}`;
+    case 'archive': return `把「${t}」归档了`;
     case 'delete': return `删除任务「${t}」`;
     default: return `改动了「${t}」`;
   }
@@ -112,4 +114,60 @@ const FIELD_CN = { status: '状态', horizon: '周期', priority: '优先级', p
 const fieldName = (f) => FIELD_CN[f] || f;
 const truncate = (s, n) => { const x = String(s || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n) + '…' : x; };
 
-module.exports = { record, pending, isReady, clear, buildPrompt, describe, INBOX, QUIET_MS, MAX_ITEMS };
+// ---------------------------------------------------------------- 联动健康度
+//
+// 【为什么需要这个】写完集成代码、单测全绿，可飞书那头一条都没收到——因为跑着的桥接
+// 进程是代码改动之前启动的，Node 只在 require 时读一次文件。这种"文件是新的、进程是旧的"
+// 断层，测试照不出来（测试读的是磁盘上的源码），只能靠运行时自己发现。
+//
+// 判据两条，任一不满足就说明面板→飞书这条线现在是断的：
+//   1. 桥接进程还活着（.bridge.lock 里的 pid）
+//   2. 桥接的启动时间晚于集成代码的最后修改时间（否则它加载的是旧版本）
+// 再加一条软信号：有事件在 inbox 里躺过了静默期还没被取走，说明没人在消费。
+
+const LOCK_FILE = path.join(REPO, 'bridge', '.bridge.lock');
+// 桥接侧参与这条链路的文件。任何一个比桥接进程新，就说明跑着的那份是旧代码。
+const LINK_SOURCES = [path.join(REPO, 'bridge', 'main.js'), __filename];
+
+function linkHealth(now = Date.now()) {
+  let pid = 0, startedAt = 0;
+  try {
+    pid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8').trim(), 10) || 0;
+    startedAt = fs.statSync(LOCK_FILE).mtimeMs;       // lock 是启动时写的，mtime 即启动时刻
+  } catch (_) {}
+
+  let alive = false;
+  if (pid > 0) { try { process.kill(pid, 0); alive = true; } catch (_) { alive = false; } }
+
+  let newestSrc = 0, staleFile = '';
+  for (const f of LINK_SOURCES) {
+    try {
+      const m = fs.statSync(f).mtimeMs;
+      if (m > newestSrc) { newestSrc = m; staleFile = path.relative(REPO, f).replace(/\\/g, '/'); }
+    } catch (_) {}
+  }
+  const codeStale = alive && startedAt > 0 && newestSrc > startedAt;
+
+  const evts = pending();
+  const oldest = evts.length ? Math.min(...evts.map((e) => Date.parse(e.at) || now)) : 0;
+  // 静默期 + 一分钟宽限还没被取走 = 没人在消费这个队列
+  const backedUp = !!oldest && now - oldest > QUIET_MS + 60000;
+
+  const ok = alive && !codeStale && !backedUp;
+  let reason = '';
+  if (!pid) reason = '桥接没有在运行（找不到 .bridge.lock）——面板上的改动不会出现在飞书里。';
+  else if (!alive) reason = `桥接进程已退出（pid ${pid}）——面板上的改动不会出现在飞书里。`;
+  else if (codeStale) reason = `桥接进程比联动代码旧（进程起于 ${fmtTime(startedAt)}，${staleFile} 改于 ${fmtTime(newestSrc)}）` +
+    '——它加载的是改动前的版本，联动不会生效。重启托盘即可。';
+  else if (backedUp) reason = `有 ${evts.length} 条改动在队列里积压了 ${Math.round((now - oldest) / 60000)} 分钟没被取走——桥接可能卡住了。`;
+
+  return { ok, reason, pid, alive, codeStale, backedUp, pending: evts.length, startedAt, newestSrc };
+}
+
+const fmtTime = (ms) => {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+module.exports = { record, pending, isReady, clear, buildPrompt, describe, linkHealth, INBOX, QUIET_MS, MAX_ITEMS };

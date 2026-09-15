@@ -520,12 +520,88 @@ test('U9 双端联动: 面板改动会投递事件, 提示词只许播报不许�
   assert(/panelEvents\.clear\(evts\)/.test(main), '事件没有在处理后清除, 会无限重播同一批');
 });
 
+test('U9 面板编辑: 重写下一步计划不破坏文件, 且能识别"没变化"', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  const src = ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# X', '', '> 手写的引用块要活着', '', '## 当前进度', '- [2026-01-02 03:04] 一。', '',
+    '## 下一步计划', '- 旧计划一', '- 旧计划二', ''].join('\n');
+  const t = T.parse(src, 'X');
+  // 前端会把原文回填进 textarea, 用户原样提交时不该产生一次"改动"(否则飞书会被空播报刷屏)
+  assert(T.setNext(t, '旧计划一\n旧计划二') === null, '内容没变却报告成改动了');
+  const ch = T.setNext(t, '新计划一\n- 新计划二\n\n   \n新计划三');
+  assert(ch && ch.to === '新计划一\n新计划二\n新计划三',
+    'textarea 里的 "- " 前缀和空行没被清干净: ' + JSON.stringify(ch && ch.to));
+  const out = T.serialize(t);
+  assert(out.includes('> 手写的引用块要活着'), '重写计划把正文其它部分弄丢了');
+  assert(out.includes('- [2026-01-02 03:04] 一。'), '重写计划把进度弄丢了');
+  assert(!out.includes('旧计划一'), '旧计划没被替换掉');
+  assert(T.serialize(T.parse(out, 'X')) === out, '重写后的文件自身往返有损');
+});
+
+test('U9 面板归档: 未完成任务绝不允许归档', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  const mk = (status) => {
+    const t = T.parse(['---', 'type: task', 'status: ' + status, 'created: 2026-01-02 03:04', '---', '',
+      '# X', '', '## 当前进度', '- [2026-01-02 03:04] 一。', ''].join('\n'), 'X');
+    t.bucket = 'active';
+    t.file = path.join(TMP, 'never-written.md');   // 会在状态校验处就抛错, 碰不到文件
+    return t;
+  };
+  // CLAUDE.md 的安全底线: 未完成任务绝不删除/归档。多了个网页按钮也不松动。
+  for (const st of ['running', 'blocked']) {
+    let threw = false;
+    try { T.archive(mk(st)); } catch (_) { threw = true; }
+    assert(threw, `status=${st} 的任务竟然被允许归档了`);
+  }
+  // 已在归档区的不该再归档一次
+  const done = mk('done'); done.bucket = 'archive';
+  let threw2 = false;
+  try { T.archive(done); } catch (_) { threw2 = true; }
+  assert(threw2, '已归档的任务又被归档了一次');
+});
+
+test('U9 面板搜索: 关键词只出现在进度正文里也要搜得到', () => {
+  const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
+  const t = T.parse(['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',
+    '# 某个标题完全无关的任务', '', '## 当前进度',
+    '- [2026-01-02 03:04] 试了 DevHub，登录后默认建的列删不掉。', '',
+    '## 下一步计划', '- 换个工具', ''].join('\n'), '某个标题完全无关的任务');
+  const v = T.toView(t);
+  // 只搜标题等于搜不到——想找"那个提到 DevHub 的任务"时关键词几乎总在进度里
+  assert(!v.title.toLowerCase().includes('devhub'), '样本没构造对: 标题里不该有关键词');
+  assert(v.haystack.includes('devhub'), '进度正文没进搜索索引');
+  assert(v.haystack.includes('换个工具'), '下一步计划没进搜索索引');
+  assert(v.haystack === v.haystack.toLowerCase(), 'haystack 必须是小写的, 否则前端小写匹配会漏');
+});
+
+test('U9 联动可观测: 桥接比集成代码旧必须被自己发现', () => {
+  const EV = require(path.join(REPO, 'tools', 'panel', 'events.js'));
+  const h = EV.linkHealth();
+  // 这条守的是一次真事故: 集成代码写完、单测全绿, 可飞书一条都没收到——
+  // 因为跑着的桥接是改动之前启动的, Node 只在 require 时读一次文件。
+  // 测试读磁盘源码, 照不出这种断层, 只能让产品自己在运行时报出来。
+  for (const k of ['ok', 'reason', 'alive', 'codeStale', 'backedUp', 'pending']) {
+    assert(k in h, '联动体检缺字段: ' + k);
+  }
+  assert(typeof h.ok === 'boolean', 'ok 必须是布尔');
+  assert(h.ok === (h.alive && !h.codeStale && !h.backedUp), 'ok 与三项判据不自洽: ' + JSON.stringify(h));
+  assert(h.ok || h.reason, '不 ok 时必须给出人话原因, 否则用户不知道要干嘛');
+  // 页面必须真的把它显示出来, 否则算出来也白算
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  assert(/S\.link/.test(html) && /联动未生效/.test(html), '页面没有展示联动状态');
+});
+
 test('U9 离线: SW 缓存只读快照, 写操作绝不排队重放', () => {
   const sw = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'sw.js'), 'utf8');
   assert(/api\/state/.test(sw) && /caches/.test(sw), 'SW 没有做数据快照');
   // 离线补写是危险的: 你在飞书那头可能已经改过同一个任务, 等服务回来再灌旧指令就是静默覆盖
   assert(!/background-?sync|SyncManager|replay/i.test(sw), 'SW 不许把写操作排队重放');
   assert(/offline\s*=\s*true/.test(sw), '回放快照时必须打 offline 标记, 页面才能转只读');
+  // shell 不许缓存优先: 缓存优先会让改完页面刷新看不到变化(得记着改 VER), 而且带 ?t= 进来时
+  // 直接返回缓存页, 服务端那个"种 cookie 再 302 到干净 /"的重定向根本不会发生, token 就留在
+  // 浏览器历史里了。服务在 127.0.0.1, 网络优先的代价是亚毫秒一跳。
+  assert(/shellNetworkFirst/.test(sw), 'shell 必须网络优先');
+  assert(!/caches\.match\(req[^)]*\)\.then\(\(hit\)\s*=>\s*\n?\s*hit \|\|/.test(sw), 'shell 还在走缓存优先');
   const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
   assert(/S\.offline/.test(html) && /只读|改不了/.test(html), '页面没有根据 offline 标记转只读');
 });

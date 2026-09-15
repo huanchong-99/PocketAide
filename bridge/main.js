@@ -503,8 +503,16 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
       const scraped = await claude.ask(panelEvents.buildPrompt(evts), { readySignal: isOutboxFresh });
       const filed = takeOutbox();
       const reply = ((filed && filed.trim()) || scraped || '').trim();
-      if (reply && cfg.ownerOpenId) {
-        for (const c of chunkText(reply, 3500)) await feishu.sendCard(cfg.ownerOpenId, c, HEADER + ' (电脑面板)');
+      // 最后一跳必须留痕：只打"注入会话播报…"的话，一旦 claude 没产出回复，
+      // 日志看起来和成功一模一样，排查时根本分不出是没发出去还是没人回。
+      if (!reply) {
+        log('面板变更已注入, 但本轮没拿到回复(outbox 空且屏幕没抓到), 飞书未收到播报。');
+      } else if (!cfg.ownerOpenId) {
+        log('面板变更已注入并拿到回复, 但没有配置 ownerOpenId, 无法发送。');
+      } else {
+        const chunks = chunkText(reply, 3500);
+        for (const c of chunks) await feishu.sendCard(cfg.ownerOpenId, c, HEADER + ' (电脑面板)');
+        log('面板变更播报已发送到飞书：', chunks.length, '段, 共', reply.length, '字。');
       }
       await commitAndPushRound('panel-event');
     } catch (e) { log('面板变更播报失败(忽略):', e.message); }

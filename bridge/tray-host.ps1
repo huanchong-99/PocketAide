@@ -198,38 +198,66 @@ function Open-SwitchUi {
   } catch { Show-Balloon ($global:L.uiFail -f $_.Exception.Message) }
 }
 
-# Task panel. Unlike the switch UI this one is a fixed-port resident service, because it must
-# support PWA install/offline (a random port would break the installed shortcut every restart).
-# So: if it is already listening, just open the browser; only start a process when it is not.
-# The token comes from the .token file rather than stdout, since an already-running instance
-# is not ours to read stdout from.
+# --- Task panel ---------------------------------------------------------------
+# Unlike the switch UI this one is a fixed-port RESIDENT service, because it must support PWA
+# install/offline: a random port would break the installed shortcut on every restart.
+#
+# It starts with the tray (not lazily on menu click) and dies with it. Lazy start looked
+# cheaper but was wrong in practice: an installed PWA icon, a bookmark, or the phone opening
+# 127.0.0.1:8787 all bypass the menu entirely, and would just hit a dead port. A resident
+# service is the only thing that makes those entry points work.
+
+function Get-PanelPort {
+  if ($env:PANEL_PORT) { return [int]$env:PANEL_PORT }
+  return 8787
+}
+
+function Test-PanelLive {
+  param([int]$Port)
+  try {
+    $c = New-Object System.Net.Sockets.TcpClient
+    $c.Connect('127.0.0.1', $Port); $c.Close(); return $true
+  } catch { return $false }
+}
+
+# Idempotent: if something is already listening on the port we leave it alone (it may be a
+# panel started by hand, and double-binding would just make the second one exit with EADDRINUSE).
+function Start-Panel {
+  $port = Get-PanelPort
+  if (Test-PanelLive -Port $port) { return $true }
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName         = $NodeExe
+    $psi.Arguments        = '"' + $PanelJs + '" --no-open'
+    $psi.WorkingDirectory = $RepoDir
+    $psi.UseShellExecute  = $false
+    $psi.CreateNoWindow   = $true
+    $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $global:panelChild = [System.Diagnostics.Process]::Start($psi)
+  } catch { return $false }
+  for ($i = 0; $i -lt 40; $i++) {          # up to ~4s for the listener to come up
+    Start-Sleep -Milliseconds 100
+    if (Test-PanelLive -Port $port) { return $true }
+  }
+  return $false
+}
+
+function Stop-Panel {
+  try {
+    if ($global:panelChild -and -not $global:panelChild.HasExited) {
+      Start-Process -FilePath 'taskkill.exe' -ArgumentList '/PID', $global:panelChild.Id, '/T', '/F' `
+        -NoNewWindow -Wait -ErrorAction SilentlyContinue
+    }
+  } catch {}
+}
+
 function Open-TaskPanel {
   Show-Balloon $global:L.panelOpening
   try {
-    $port = 8787
-    if ($env:PANEL_PORT) { $port = [int]$env:PANEL_PORT }
-
-    $live = $false
-    try {
-      $c = New-Object System.Net.Sockets.TcpClient
-      $c.Connect('127.0.0.1', $port); $live = $true; $c.Close()
-    } catch { $live = $false }
-
-    if (-not $live) {
-      $psi = New-Object System.Diagnostics.ProcessStartInfo
-      $psi.FileName         = $NodeExe
-      $psi.Arguments        = '"' + $PanelJs + '" --no-open'
-      $psi.WorkingDirectory = $RepoDir
-      $psi.UseShellExecute  = $false
-      $psi.CreateNoWindow   = $true
-      [void][System.Diagnostics.Process]::Start($psi)
-      for ($i = 0; $i -lt 40; $i++) {          # up to ~4s for the listener to come up
-        Start-Sleep -Milliseconds 100
-        try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); $c.Close(); $live = $true; break } catch {}
-      }
-      if (-not $live) { throw 'panel did not start listening on port ' + $port }
-    }
-
+    $port = Get-PanelPort
+    if (-not (Start-Panel)) { throw 'panel did not start listening on port ' + $port }
+    # Token comes from the .token file, not stdout: the running instance may not be our child.
+    # The server sets a cookie and 302s to a clean '/', so the token does not stay in history.
     $token = ''
     if (Test-Path $PanelTokenFile) { $token = (Get-Content -Raw -Path $PanelTokenFile).Trim() }
     $url = 'http://127.0.0.1:' + $port + '/'
@@ -369,6 +397,7 @@ $global:miExit.Text = $global:L.exit
 $global:miExit.add_Click({
   $global:stopping = $true
   Stop-Bridge
+  Stop-Panel
   $notify.Visible = $false
   [System.Windows.Forms.Application]::Exit()
 })
@@ -401,10 +430,14 @@ $timer.add_Tick({
 $timer.Start()
 
 Start-Bridge
+# Panel is resident, not lazy: an installed PWA icon / bookmark / the phone hitting
+# 127.0.0.1:8787 never goes through our menu, and a dead port makes all of those fail.
+[void](Start-Panel)
 [System.Windows.Forms.Application]::Run()
 
 # Reached only after Exit(): clean up.
 try { $timer.Stop() } catch {}
 $global:stopping = $true
 Stop-Bridge
+Stop-Panel
 try { $notify.Dispose() } catch {}

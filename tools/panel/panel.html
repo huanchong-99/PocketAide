@@ -138,6 +138,46 @@
   .toast.on{display:block}
   .toast.bad{background:#8f2f4c;border-color:#8f2f4c;color:#fff}
   .ro .card,.ro tbody tr{cursor:default}
+
+  /* 新建任务弹窗 */
+  .dlg{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:42;display:none;
+       background:var(--card);border:1px solid var(--line2);border-radius:14px;
+       box-shadow:0 24px 64px #14141329;width:min(440px,92vw);padding:18px}
+  .dlg.on{display:block}
+  .dlg h3{margin:0 0 14px;font-size:15px}
+  .dlg .fields{margin-bottom:14px}
+  .dlg .row{display:flex;gap:8px;justify-content:flex-end}
+  textarea{width:100%;resize:vertical;line-height:1.6}
+
+  /* ── 响应式 ──────────────────────────────────────────────────────
+     PWA 的全部意义就是装到手机上。四列看板在 390px 宽的屏幕里会横向铺开、
+     卡片被截断，等于装了也没法用。所以窄屏逐级降列，并且把桌面才有的
+     拖拽提示换成触屏能懂的说法（HTML5 drag 在触屏上根本不触发）。 */
+  .only-narrow{display:none}
+  @media (max-width:1100px){
+    .cols{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  @media (max-width:760px){
+    .wrap{padding:14px 12px 48px}
+    h1{font-size:19px}
+    .cols,.quad{grid-template-columns:1fr}
+    .grp .cards{grid-template-columns:1fr}
+    .only-narrow{display:inline}
+    .only-wide{display:none}
+    /* 视图切换横向可滑，不换行挤掉筛选器 */
+    .tabs{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+    .tabs::-webkit-scrollbar{display:none}
+    .bar{gap:6px}
+    .bar input#q{flex:1 1 100%;width:auto!important}
+    .bar select{flex:1 1 30%;min-width:0}
+    .grow{display:none}
+    #btnNew{flex:1 1 60%} #btnReload{flex:1 1 30%}
+    /* 列表视图：窄屏砍掉次要列，剩下的才读得下去 */
+    th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4),
+    th:nth-child(8),td:nth-child(8){display:none}
+    .drawer{width:100vw}
+    .dfoot{flex-wrap:wrap}
+  }
 </style>
 </head>
 <body>
@@ -156,7 +196,7 @@
       <button class="tab" data-v="archive">归档</button>
       <button class="tab" data-v="health">体检</button>
     </div>
-    <input id="q" placeholder="搜索标题 / 项目…" style="width:190px">
+    <input id="q" placeholder="搜索标题 / 项目 / 进度正文…" style="width:230px">
     <select id="fh"><option value="">全部周期</option></select>
     <select id="fp"><option value="">全部项目</option></select>
     <select id="fpri"><option value="">全部优先级</option></select>
@@ -182,6 +222,22 @@
   </div>
 </div>
 
+<div class="dlg" id="newDlg">
+  <h3>新建任务</h3>
+  <div class="fields">
+    <label>标题</label><input id="nTitle" placeholder="任务标题（也是文件名）">
+    <label>周期</label><select id="nHorizon"></select>
+    <label>优先级</label><select id="nPriority"></select>
+    <label>项目</label><input id="nProject" placeholder="（可留空）">
+    <label>截止日</label><input id="nDeadline" type="date">
+    <label>下一步</label><textarea id="nPlan" rows="3" placeholder="一行一条（可留空）"></textarea>
+  </div>
+  <div class="row">
+    <button id="nCancel">取消</button>
+    <button id="nOk" class="primary">创建</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -193,10 +249,25 @@ const ST_CN = { running: '进行中', blocked: '阻塞', done: '已完成', canc
 const ST_ORDER = ['running', 'blocked', 'done', 'cancelled'];
 const closed = (t) => t.status === 'done' || t.status === 'cancelled';
 
-let S = { tasks: [], health: null, meta: {}, offline: false };
-let view = 'board';
+let S = { tasks: [], health: null, meta: {}, link: null, offline: false };
 let cur = null;               // 抽屉里打开的任务
-let sortKey = 'staleDays', sortDir = -1;
+
+// 视图/筛选/排序记在本地：每次刷新都跳回「看板·无筛选」很烦——
+// 你盯着"项目=求职"看了一上午，一次自动刷新就给你清了。
+const PREF_KEY = 'panel.prefs.v1';
+const prefs = (() => {
+  try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (_) { return {}; }
+})();
+let view = prefs.view || 'board';
+let sortKey = prefs.sortKey || 'staleDays', sortDir = prefs.sortDir || -1;
+function savePrefs() {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({
+      view, sortKey, sortDir,
+      q: $('q').value, fh: $('fh').value, fp: $('fp').value, fpri: $('fpri').value,
+    }));
+  } catch (_) {}
+}
 
 // ---------------------------------------------------------------- 通信
 
@@ -231,23 +302,29 @@ async function reload() {
 
 // ---------------------------------------------------------------- 过滤
 
+let filtersRestored = false;
+
 function fillFilters() {
-  const keep = (sel, arr, ph) => {
-    const v = sel.value;
+  // 首次填充时用上次存的值，之后保留用户当前的选择（下拉选项会随数据变，不能每次重置）
+  const keep = (sel, arr, ph, saved) => {
+    const v = filtersRestored ? sel.value : (saved || '');
     sel.innerHTML = '<option value="">' + ph + '</option>' +
       arr.map((x) => '<option' + (x === v ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
   };
-  keep($('fh'), S.meta.horizons || [], '全部周期');
-  keep($('fp'), S.meta.projects || [], '全部项目');
-  keep($('fpri'), S.meta.priorities || [], '全部优先级');
+  keep($('fh'), S.meta.horizons || [], '全部周期', prefs.fh);
+  keep($('fp'), S.meta.projects || [], '全部项目', prefs.fp);
+  keep($('fpri'), S.meta.priorities || [], '全部优先级', prefs.fpri);
+  if (!filtersRestored) { if (prefs.q) $('q').value = prefs.q; filtersRestored = true; }
 }
 
 function visible(bucket) {
   const q = $('q').value.trim().toLowerCase();
   const h = $('fh').value, p = $('fp').value, pri = $('fpri').value;
+  // 搜正文而不只是标题：想找"那个提到 DevHub 的任务"时，关键词几乎总在进度里。
+  // haystack 由服务端拼好下发（标题+项目+说明+进度+下一步，已小写、已截断）。
   return S.tasks.filter((t) =>
     t.bucket === bucket &&
-    (!q || (t.title + ' ' + t.name + ' ' + (t.project || '')).toLowerCase().includes(q)) &&
+    (!q || (t.haystack || (t.title + ' ' + t.name).toLowerCase()).includes(q)) &&
     (!h || t.horizon === h) && (!p || t.project === p) && (!pri || t.priority === pri));
 }
 
@@ -305,6 +382,12 @@ function subLine() {
 function banners() {
   if (!S.health) return '';
   const h = S.health, out = [];
+  // 联动状态优先：如果改动发不到飞书，这是你最该先知道的事——
+  // 否则你在面板上改了一上午，以为手机那头都同步了，其实一条没出去。
+  if (S.link && !S.link.ok && !S.offline) {
+    out.push('<div class="banner b-bad">🔌 <b>飞书联动未生效</b> —— ' + esc(S.link.reason) +
+      '<br><span style="opacity:.75">面板上的改动照常写进任务文件，只是不会在飞书里播报。</span></div>');
+  }
   if (S.offline) {
     out.push('<div class="banner b-warn">⚠ 面板服务没在运行，正在显示<b>离线快照</b>' +
       (S.snapshotAt ? '（' + esc(String(S.snapshotAt).slice(0, 16).replace('T', ' ')) + '）' : '') +
@@ -357,7 +440,9 @@ function renderQuad() {
   };
   return '<div class="quad">' + QUAD.map(box).join('') + '</div>' +
     (un.length ? '<div class="sec">未分类 <span class="sub">（' + un.length +
-      ' 个还没设优先级；拖进上面任一象限即可，紧急与否按截止日自动算）</span></div>' +
+      ' 个还没设优先级；<span class="only-wide">拖进上面任一象限即可</span>' +
+      // 触屏上 HTML5 拖拽根本不触发，不能给手机用户一句"拖进去"然后让他戳半天
+      '<span class="only-narrow">点开任务改优先级</span>，紧急与否按截止日自动算）</span></div>' +
       '<div class="grp"><div class="cards">' + un.map(cardHtml).join('') + '</div></div>' : '');
 }
 
@@ -463,7 +548,12 @@ function drawerBody(t) {
       '<label>项目</label>' + '<input id="fProject" value="' + esc(t.project) + '" placeholder="（未设）"' + ro + '>' +
       '<label>截止日</label>' + '<input id="fDeadline" type="date" value="' + esc(t.deadline ? t.deadline.slice(0, 10) : '') + '"' + ro + '>' +
     '</div>' +
-    (S.offline ? '' : '<button id="fSave" class="primary">保存字段</button>') +
+    (S.offline ? '' : '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button id="fSave" class="primary">保存字段</button>' +
+      // 归档只对已完成/已取消开放：CLAUDE.md 的底线是未完成任务绝不归档，
+      // 多了个网页按钮也不松动。已在归档区的自然也不再显示。
+      (closed(t) && t.bucket === 'active' ? '<button id="fArchive">归档</button>' : '') +
+      '</div>') +
     (t.intro ? '<div class="sec">说明</div><div class="what" style="white-space:pre-wrap;font-size:12.5px;color:var(--dim)">' + esc(t.intro) + '</div>' : '') +
     '<div class="sec">当前进度 <span class="sub">（' + t.progress.length + ' 条）</span></div>' +
     (t.progress.length
@@ -471,10 +561,16 @@ function drawerBody(t) {
           '<div class="ev"><div class="when">' + esc(p.date + ' ' + p.time) + '</div>' +
           '<div class="what">' + esc(p.text) + '</div></div>').join('') + '</div>'
       : '<div class="empty">还没有进度记录</div>') +
-    '<div class="sec">下一步计划</div>' +
-    (t.next.length ? '<ul style="margin:0;padding-left:20px">' + t.next.map((n) =>
-      '<li style="font-size:12.5px;white-space:pre-wrap">' + esc(n) + '</li>').join('') + '</ul>'
-      : '<div class="empty">没有计划条目</div>') +
+    // 下一步计划可编辑：卡片正面推的就是这一条，之前只能看不能改，
+    // 想调整得去改文件——那这个面板就只做完了一半。
+    '<div class="sec">下一步计划 <span class="sub">（一行一条）</span></div>' +
+    (S.offline
+      ? (t.next.length ? '<ul style="margin:0;padding-left:20px">' + t.next.map((n) =>
+          '<li style="font-size:12.5px;white-space:pre-wrap">' + esc(n) + '</li>').join('') + '</ul>'
+          : '<div class="empty">没有计划条目</div>')
+      : '<textarea id="fNext" rows="' + Math.min(8, Math.max(3, t.next.length + 1)) + '" ' +
+        'placeholder="下一步要做什么？一行一条">' + esc(t.next.join('\n')) + '</textarea>' +
+        '<div style="margin-top:8px"><button id="fNextSave">保存计划</button></div>') +
     (t.links && t.links.length
       ? '<div class="sec">关联任务</div><div class="meta">' + t.links.map((l) =>
           '<a href="#" class="chip" data-name="' + esc(l) + '" data-bucket="active">' + esc(l) + '</a>').join('') + '</div>'
@@ -510,6 +606,7 @@ function wire() {
     th.addEventListener('click', () => {
       const k = th.dataset.k;
       if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'title' ? 1 : -1; }
+      savePrefs();
       render();
     });
   });
@@ -560,6 +657,44 @@ function wireDrawer() {
     priority: $('fPriority').value, project: $('fProject').value.trim(),
     deadline: $('fDeadline').value,
   }, '字段已保存');
+
+  const nx = $('fNextSave');
+  if (nx) nx.onclick = async () => {
+    try {
+      const r = await api('setNext', { name: cur.name, bucket: cur.bucket, text: $('fNext').value });
+      if (!r.changed) return toast('没有变化');
+      toast('计划已保存');
+      await reload();
+      await open(cur.name, cur.bucket);
+    } catch (e) { toast('保存失败：' + e.message, true); }
+  };
+
+  const ar = $('fArchive');
+  if (ar) ar.onclick = async () => {
+    // 归档会移动文件，给一次确认——但用页面内的二次点击，不用 confirm()：
+    // 浏览器原生弹窗会阻塞整个页面，自动化里还会把会话卡死。
+    if (ar.dataset.armed !== '1') {
+      ar.dataset.armed = '1';
+      ar.textContent = '确认归档？再点一次';
+      ar.style.borderColor = 'var(--bad)';
+      ar.style.color = 'var(--bad)';
+      setTimeout(() => {
+        if (!$('fArchive')) return;
+        $('fArchive').dataset.armed = '';
+        $('fArchive').textContent = '归档';
+        $('fArchive').style.borderColor = '';
+        $('fArchive').style.color = '';
+      }, 4000);
+      return;
+    }
+    try {
+      await api('archive', { name: cur.name, bucket: cur.bucket });
+      toast('已归档「' + cur.title + '」');
+      closeDrawer();
+      await reload();
+    } catch (e) { toast('归档失败：' + e.message, true); }
+  };
+
   document.querySelectorAll('#dBody a[data-name]').forEach((a) => {
     a.addEventListener('click', (e) => { e.preventDefault(); open(a.dataset.name, 'active'); });
   });
@@ -579,24 +714,55 @@ $('dAdd').onclick = async () => {
 };
 $('dProg').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('dAdd').click(); });
 $('dClose').onclick = closeDrawer;
-$('mask').onclick = closeDrawer;
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+// 遮罩和 Esc 现在服务两个浮层（抽屉 + 新建弹窗），关掉当前开着的那个
+const closeTop = () => { if ($('newDlg').classList.contains('on')) closeNewDlg(); else closeDrawer(); };
+$('mask').onclick = closeTop;
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTop(); });
 
-$('btnNew').onclick = async () => {
+// 新建任务用页面内表单，不用 prompt()：prompt 只能填一个字段，建完还得再开抽屉补周期、
+// 优先级、截止日；而且它是阻塞式原生弹窗，PWA 里样式失控、自动化里还会卡死会话。
+function openNewDlg() {
   if (S.offline) return toast('离线快照，建不了', true);
-  const title = prompt('新任务标题：');
-  if (!title || !title.trim()) return;
+  const fill = (sel, arr, ph) => { sel.innerHTML = '<option value="">' + ph + '</option>' +
+    arr.map((x) => '<option>' + esc(x) + '</option>').join(''); };
+  fill($('nHorizon'), S.meta.horizons || [], '（默认短期）');
+  fill($('nPriority'), S.meta.priorities || [], '（未设）');
+  $('nTitle').value = ''; $('nProject').value = ''; $('nDeadline').value = ''; $('nPlan').value = '';
+  $('mask').classList.add('on');
+  $('newDlg').classList.add('on');
+  setTimeout(() => $('nTitle').focus(), 30);
+}
+function closeNewDlg() {
+  $('newDlg').classList.remove('on');
+  if (!$('drawer').classList.contains('on')) $('mask').classList.remove('on');
+}
+$('btnNew').onclick = openNewDlg;
+$('nCancel').onclick = closeNewDlg;
+$('nOk').onclick = async () => {
+  const title = $('nTitle').value.trim();
+  if (!title) { $('nTitle').focus(); return toast('标题不能为空', true); }
   try {
-    const r = await api('create', { name: title.trim(), title: title.trim() });
+    const r = await api('create', {
+      name: title, title,
+      horizon: $('nHorizon').value || undefined,
+      priority: $('nPriority').value || undefined,
+      project: $('nProject').value.trim() || undefined,
+      deadline: $('nDeadline').value || undefined,
+      plan: $('nPlan').value || undefined,
+    });
+    closeNewDlg();
     toast('已建「' + r.task.title + '」');
     await reload();
     open(r.task.name, 'active');
   } catch (e) { toast('创建失败：' + e.message, true); }
 };
+$('nTitle').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('nOk').click(); });
 
 $('btnReload').onclick = reload;
-document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => { view = b.dataset.v; render(); }));
-['q', 'fh', 'fp', 'fpri'].forEach((id) => $(id).addEventListener('input', render));
+document.querySelectorAll('.tab').forEach((b) =>
+  b.addEventListener('click', () => { view = b.dataset.v; savePrefs(); render(); }));
+['q', 'fh', 'fp', 'fpri'].forEach((id) =>
+  $(id).addEventListener('input', () => { savePrefs(); render(); }));
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 reload();

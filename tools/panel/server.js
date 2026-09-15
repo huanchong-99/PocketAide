@@ -109,6 +109,9 @@ const API = {
     return {
       tasks: all.map((t) => T.toView(t, n)),
       health: T.healthCheck(all, n),
+      // 面板→飞书这条线现在通不通。放在主数据里一起下发，页面每次刷新都能看到，
+      // 不用你去猜"我刚才改的到底有没有发出去"。
+      link: EV.linkHealth(),
       meta: {
         statuses: T.STATUSES, horizons: T.HORIZONS, priorities: T.PRIORITIES,
         projects: [...new Set(all.map((t) => t.fm.project).filter(Boolean))].sort(),
@@ -135,6 +138,26 @@ const API = {
       ? { kind: 'status', name, title: t.title || name, from: st.from, to: st.to }
       : { kind: 'fields', name, title: t.title || name, changes });
     return { changed: changes, task: T.toDetail(t, now()) };
+  },
+
+  /** 重写「下一步计划」。卡片正面推的就是这条，之前只能看不能改。 */
+  async setNext(b) {
+    const name = need(b.name, 'name');
+    const t = T.loadOne(name, b.bucket);
+    const ch = T.setNext(t, b.text);
+    if (!ch) return { changed: false, note: '没有实际变化' };
+    T.save(t);
+    EV.record({ kind: 'next', name, title: t.title || name, to: ch.to });
+    return { changed: true, task: T.toDetail(t, now()) };
+  },
+
+  /** 归档。只放行 done/cancelled——安全底线在 tasks.archive 里，这里不重复判断。 */
+  async archive(b) {
+    const name = need(b.name, 'name');
+    const t = T.loadOne(name, b.bucket);
+    T.archive(t);
+    EV.record({ kind: 'archive', name, title: t.title || name });
+    return { name, bucket: 'archive' };
   },
 
   async addProgress(b) {
