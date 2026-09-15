@@ -203,6 +203,15 @@ const API = {
     return { ...r, ...providersView() };
   },
 
+  /**
+   * 「从本机当前配置复制」：把全局此刻用的那一档照搬成一个供应商档。
+   * 官方订阅这一档不需要重新登录、也不需要填 Key（走已有的 OAuth 凭据）。
+   */
+  async importLocal(b) {
+    const r = await sw.CMDS.import({ _: [], flags: b && b.name ? { name: b.name } : {} });
+    return { ...r, ...providersView() };
+  },
+
   async ping() { lastBeat = Date.now(); return { ok: true }; },
 };
 

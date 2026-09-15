@@ -297,6 +297,49 @@ test('U8 webui 安全契约: 无 token 403 / Key 不出明文 / 只绑本地', (
   console.log('        (' + out.replace(/^PASS /, '') + ')');
 });
 
+test('U7 桥接播种不继承本机供应商: ANTHROPIC_* 与顶层 model 一律剥离', () => {
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  // 模拟"全局此刻正配着某第三方"的本机配置被拿去给桥接播种
+  const global = {
+    model: 'vendor-a-pro',
+    hooks: { keep: 1 }, enabledPlugins: { p: true },
+    env: {
+      ANTHROPIC_BASE_URL: 'https://api.vendor-a.test/anthropic',
+      ANTHROPIC_AUTH_TOKEN: 'sk-should-never-be-inherited',
+      ANTHROPIC_MODEL: 'vendor-a-pro',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
+    },
+  };
+  const seed = sw.sanitizeForBridgeSeed(global);
+  const leaked = Object.keys(seed.env || {}).filter((k) => k.startsWith('ANTHROPIC_'));
+  assert(leaked.length === 0, '播种把本机供应商继承过去了: ' + leaked.join(','));
+  assert(!seed.model, '播种把本机模型继承过去了: ' + seed.model);
+  assert(seed.env.CLAUDE_CODE_EFFORT_LEVEL === 'max', '不该动非供应商 env');
+  assert(seed.hooks && seed.hooks.keep === 1 && seed.enabledPlugins, '应继承 hooks/plugins 等行为设置');
+  assert(global.env.ANTHROPIC_BASE_URL && global.model, '纯函数不得就地修改调用方传入的对象');
+  // 桥接侧必须真的走这条路径，而不是又退回整份复制
+  const main = fs.readFileSync(path.join(REPO, 'bridge', 'main.js'), 'utf8');
+  assert(/sanitizeForBridgeSeed/.test(main), 'bridge/main.js 播种未经过 sanitizeForBridgeSeed');
+  assert(!/copyFileSync\(srcS, dstS\)/.test(main), 'bridge/main.js 仍在整份复制全局 settings(会继承供应商)');
+});
+
+test('U7 从本机复制一档: 官方档不带任何 Key(走已登录凭据, 不用重新登录)', () => {
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  assert(typeof sw.CMDS.import === 'function', '缺少 import 命令');
+  // 官方档的定义就是"一个 ANTHROPIC_* 都不写"——落地后必须彻底干净，
+  // 鉴权才会回落到 ~/.claude/.credentials.json 的 OAuth 凭据(桥接每次启动从全局刷新)。
+  const out = sw.applyProvider(
+    { model: 'x', env: { ANTHROPIC_BASE_URL: 'https://old.test', ANTHROPIC_AUTH_TOKEN: 'sk-old' } },
+    { official: true, model: 'opus[1m]', env: {} });
+  assert(Object.keys(out.env || {}).length === 0, '官方档不该留任何 env 键');
+  assert(out.model === 'opus[1m]', '官方档模型未落地');
+  // 页面的「从本机当前配置复制」必须复用同一条命令，不能另写一套导入逻辑
+  const webui = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.js'), 'utf8');
+  assert(/sw\.CMDS\.import\(/.test(webui), 'webui 的复制入口未复用 CMDS.import');
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.html'), 'utf8');
+  assert(/btnImport/.test(html) && /importLocal/.test(html), '页面缺少「从本机当前配置复制」入口');
+});
+
 test('U8 webui 与 CLI 同源: 页面写操作复用 switch.js 的 CMDS', () => {
   const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
   for (const k of ['use', 'check', 'model', 'restart', 'rm']) {

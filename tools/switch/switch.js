@@ -141,6 +141,29 @@ function applyProvider(settings, provider) {
   return s;
 }
 
+/**
+ * 桥接首次播种用的净化器：从全局配置派生一份**不含任何供应商信息**的基线。
+ *
+ * 桥接的 settings.json 首次需要从全局播种一份(为的是继承 hooks / plugins / effort 这些行为设置)，
+ * 但**绝不能连供应商一起继承**。整份复制的后果很具体：换新机或桥接 home 被删时，若全局当时正配着
+ * 某个第三方端点，桥接就把那份 Base URL + Key 静默捡了过来；此时若还没有 providers.json，
+ * syncBridge 不做任何事，于是桥接跑在一个"档案里根本没有"的供应商上，而使用者毫不知情——
+ * 正是本模块要根除的那类事故的另一个入口。
+ *
+ * 所以：env 里的 ANTHROPIC_* 全剥、顶层 model 也剥。桥接用哪个供应商、哪个模型，
+ * 只有 tools/switch 的档案说了算。没有档案时回落到 Claude Code 默认(官方订阅)，安全且可预测。
+ */
+function sanitizeForBridgeSeed(globalSettings) {
+  const s = { ...globalSettings };
+  if (s.env) {
+    const env = { ...s.env };
+    for (const k of Object.keys(env)) if (isAnthropicKey(k)) delete env[k];
+    if (Object.keys(env).length) s.env = env; else delete s.env;
+  }
+  delete s.model;
+  return s;
+}
+
 /** 落地到某个 scope 的磁盘文件。返回变更摘要，供调用方如实汇报。 */
 function applyToScope(scopeName, provider, { dryRun = false } = {}) {
   const scope = SCOPES[scopeName] || fail(`未知 scope：${scopeName}`);
@@ -636,6 +659,44 @@ const CMDS = {
     return { removed: name };
   },
 
+  /**
+   * 把"本机全局此刻正在用的那一档"复制成一个供应商档。
+   *
+   * 这是**显式**动作，不是自动继承——桥接首次播种一律剥掉供应商信息(见 sanitizeForBridgeSeed)，
+   * 免得静默跑在一个档案里没有的供应商上。但人确实常需要"我全局已经配好了，照搬一份过来"，
+   * 所以给一个手动入口。
+   *
+   * 官方订阅这一档**不需要重新登录**：它的定义就是"一个 ANTHROPIC_* 都不写"，
+   * 鉴权走 ~/.claude/.credentials.json 的 OAuth 凭据，而那份凭据桥接每次启动都会从全局刷新。
+   */
+  async import(a) {
+    const glb = readJson(SCOPES.global.settings, null) || fail(`读不到 ${SCOPES.global.settings}`);
+    const env = Object.fromEntries(Object.entries(glb.env || {}).filter(([k]) => isAnthropicKey(k)));
+    const official = !env.ANTHROPIC_BASE_URL;
+    const name = a.flags.name || a._[0] || (official ? 'official' : guessName(env.ANTHROPIC_BASE_URL));
+    const store = readJson(STORE, { current: null, providers: {} });
+    const prev = store.providers[name] || {};
+
+    store.providers[name] = official
+      ? { label: a.flags.label || prev.label || 'Anthropic 官方（订阅 / OAuth，无需重新登录）',
+          official: true, model: glb.model || 'opus[1m]', env: {},
+          catalog: Array.from(new Set([...(prev.catalog || []), glb.model || 'opus[1m]', 'opus', 'sonnet', 'haiku'])) }
+      : { label: a.flags.label || prev.label || `${name}（从本机全局配置复制）`,
+          model: env.ANTHROPIC_MODEL || glb.model || null, env,
+          catalog: Array.from(new Set([...(prev.catalog || []), env.ANTHROPIC_MODEL].filter(Boolean))) };
+
+    if (!store.current) store.current = name;
+    saveStore(store);
+    return {
+      imported: name, official,
+      model: store.providers[name].model,
+      baseUrl: env.ANTHROPIC_BASE_URL || null,
+      note: official
+        ? '官方订阅档：鉴权走已登录的 OAuth 凭据，无需重新登录，也不需要填 Key'
+        : '已连同 Base URL 与 Key 一起复制',
+    };
+  },
+
   /** 把真实档案重新导出成脱敏模板（开源版用）。 */
   async example() {
     const store = loadStore();
@@ -728,6 +789,7 @@ async function main() {
       '供应商 / 模型切换底座',
       '',
       '  init [--force]                                从现有配置播种档案',
+      '  import [名称] [--label <说明>]                把本机全局当前那一档复制成供应商档',
       '  list                                          列出所有供应商',
       '  status                                        双端体检：配置 vs 实跑 vs 漂移告警',
       '  use <名称>                                    切换（先探活→再落盘→再重启，顺序不可调）',
@@ -764,6 +826,6 @@ if (require.main === module) {
 // CMDS / parseArgs 一并导出：Web UI 直接复用同一套命令实现，绝不另写一份——
 // 两个入口走不同代码路径，迟早会出现"CLI 切了、页面显示没切"这类对不上的行为。
 module.exports = {
-  syncBridge, applyProvider, modelMatches, buildStatus, detectLive,
+  syncBridge, applyProvider, sanitizeForBridgeSeed, modelMatches, buildStatus, detectLive,
   loadStore, saveStore, checkProvider, CMDS, parseArgs, SCOPES, STORE,
 };

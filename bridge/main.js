@@ -279,7 +279,16 @@ function prepareConfigHome() {
     {
       const dstS = path.join(BRIDGE_HOME, 'settings.json');
       const srcS = path.join(src, 'settings.json');
-      if (!fs.existsSync(dstS)) { try { fs.copyFileSync(srcS, dstS); } catch (_) {} }
+      // 播种要继承 hooks/plugins/effort 这些行为设置, 但**绝不继承供应商**——整份复制会把全局当时
+      // 配着的第三方 Base URL + Key 静默带进桥接; 若此时还没有 providers.json, syncBridge 不做任何事,
+      // 桥接就跑在一个"档案里根本没有"的供应商上。故一律过 sanitizeForBridgeSeed 剥掉 ANTHROPIC_*
+      // 与顶层 model。切换器不可用时宁可不播种(claude 用默认配置起来), 也不把供应商继承过去。
+      if (!fs.existsSync(dstS) && providerSwitch) {
+        try {
+          const glb = JSON.parse(fs.readFileSync(srcS, 'utf8'));
+          fs.writeFileSync(dstS, JSON.stringify(providerSwitch.sanitizeForBridgeSeed(glb), null, 2));
+        } catch (_) {}
+      }
       const dstC = path.join(BRIDGE_HOME, 'config.json');
       if (!fs.existsSync(dstC)) { try { fs.copyFileSync(path.join(src, 'config.json'), dstC); } catch (_) {} }
     }

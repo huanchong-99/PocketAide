@@ -59,7 +59,13 @@
   <div id="alerts"></div>
   <div id="log"></div>
 
-  <h2>供应商</h2>
+  <h2 style="display:flex;align-items:center;gap:12px">供应商
+    <button id="btnImport" style="font-weight:400">从本机当前配置复制一档</button>
+  </h2>
+  <div class="hint" style="margin:-6px 0 12px">
+    照搬你本机全局（终端）此刻正在用的那一档。<b>官方订阅无需重新登录、也不用填 Key</b>——它走的是你已登录的凭据。
+    这是手动操作：桥接不会自动继承本机的供应商配置。
+  </div>
   <div class="card" style="padding:0"><table id="tbl"><tbody></tbody></table></div>
 
   <h2 id="formTitle">添加供应商</h2>
@@ -306,6 +312,18 @@ async function save(thenCheck) {
     }
   } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
 }
+
+$('btnImport').onclick = async () => {
+  const b = $('btnImport');
+  b.disabled = true; logClear(); logLine('正在读取本机全局当前配置 …', 'step-dim');
+  try {
+    const r = await api('importLocal');
+    logLine(`✓ 已复制为「${esc(r.imported)}」${r.official ? '（官方订阅）' : '（' + esc(r.baseUrl) + '）'}　模型 ${esc(r.model || '-')}`, 'step-ok');
+    logLine(esc(r.note), 'step-dim');
+    await refresh();
+  } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
+  finally { b.disabled = false; }
+};
 
 $('btnSave').onclick = () => save(false);
 $('btnTest').onclick = () => save(true);
