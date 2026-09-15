@@ -48,6 +48,8 @@ $global:L = Get-Labels
 $global:child    = $null
 $global:stopping = $false
 $global:restarts = @()
+$global:panelChild    = $null
+$global:panelRestarts = @()
 
 # ---- Provider switcher (tools/switch) integration -------------------------------------------
 # The switcher owns which provider/model this system runs on. The tray only drives it; all the
@@ -425,6 +427,21 @@ $timer.add_Tick({
     }
   } else {
     $global:miStatus.Text = $global:L.statusStopped
+  }
+
+  # Same self-heal for the panel. It is resident, so "died and stayed dead" would silently turn
+  # the PWA icon / bookmark into a white screen with nothing telling you why. Checked by port
+  # rather than by process handle, so a panel someone started by hand also counts as alive.
+  # Capped the same way (5 per 5 min) so a panel that cannot bind never loops forever.
+  if (-not $global:stopping) {
+    if (-not (Test-PanelLive -Port (Get-PanelPort))) {
+      $pnow = Get-Date
+      $global:panelRestarts = @($global:panelRestarts | Where-Object { ($pnow - $_).TotalSeconds -lt 300 })
+      if ($global:panelRestarts.Count -lt 5) {
+        $global:panelRestarts += $pnow
+        [void](Start-Panel)
+      }
+    }
   }
 })
 $timer.Start()
