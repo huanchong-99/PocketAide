@@ -13,6 +13,7 @@ const { Terminal } = require('@xterm/headless');
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 
 const SEP = /^[─-]{20,}$/;                       // full-width input-box separators
 const SPINNER = /^[✻✽✶✢✳✻·*]/;                  // spinner frame leads
@@ -193,7 +194,13 @@ class PtyClaude extends EventEmitter {
         } else if (quiet) {
           return done(null);                                      // 无 readySignal: 退回老行为(纯屏幕静默)
         }
-        if (Date.now() - startTs > this.hardMs) { this._dumpHang(prompt); return done(new Error('ask hard-timeout')); }
+        if (Date.now() - startTs > this.hardMs) {
+          this._dumpHang(prompt);
+          // 关键：超时后必须主动打断 claude 当前轮(ESC)。否则 claude 会继续跑这一轮、与桥接错位——
+          // 桥接已"不等了"去处理下一条, 而那条被塞进 claude 的半截轮里排队, 接连撞 hardMs, 回复全落进空气。
+          try { this.p.write('\x1b'); } catch (_) {}
+          return done(new Error('ask hard-timeout'));
+        }
       }, 600);
 
       const done = (err) => {
@@ -244,7 +251,16 @@ class PtyClaude extends EventEmitter {
 
   dispose() {
     try { this.p && this.p.write('\x03'); } catch (_) {}
-    setTimeout(() => { try { this.p && this.p.kill(); } catch (_) {} }, 500);
+    const pid = this.p && this.p.pid;
+    setTimeout(() => {
+      // Windows: pty.kill() 只杀 claude 本身, 不级联它拉起的一窝 MCP 子进程 => 残留孤儿
+      // (实测「新对话」自重启后, 旧 claude + 十几个 MCP node/python 全漏在后台堆积)。
+      // 用 taskkill /T /F 杀整棵进程树(与 tray-host 的 Stop-Bridge 一致), 根治泄漏。
+      if (process.platform === 'win32' && pid) {
+        try { execFile('taskkill', ['/PID', String(pid), '/T', '/F']); } catch (_) {}
+      }
+      try { this.p && this.p.kill(); } catch (_) {}
+    }, 500);
   }
 }
 

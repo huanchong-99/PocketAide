@@ -5,7 +5,7 @@
 > 关键发现：B站 playurl 接口**不需要手动 wbi 签名**——页面内 fetch（带 cookie）直接返回 `code:0`。比想象中简单，不必复刻 bili-note 的 wbi 算法。
 
 ## 前置
-- 用 `launch-scrape-chrome.vbs` 起专用 Chrome（9222）。
+- 用 `launch-scrape-chrome.vbs` 起专用 Chrome（19222）。
 - B站音频流带防盗链，下载带 `Referer: https://www.bilibili.com/`。实测**无需登录 cookie**（audio_url 带 `mid=0` 即可下）。
 
 ## 取流步骤（Claude 用 chrome-devtools 工具执行）

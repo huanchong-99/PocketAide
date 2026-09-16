@@ -12,7 +12,7 @@ description: 把抖音/B站/本地视频转成文字并整理成知识笔记。�
 - **ASR venv**：`.venv-video-note\Scripts\python.exe`（Python 3.12 + funasr + torch CUDA）
 - **ASR 模型**：`models/SenseVoiceSmall` + `models/speech_fsmn_vad`
 - **ffmpeg**：download_audio.py 自动查找（WinGet 装的）
-- **采集 Chrome**：9222，用 `scripts/launch-scrape-chrome.vbs` 起（启动带 `--mute-audio` 全程静音；取流完自动关，见流程「关闭采集 Chrome」）
+- **采集 Chrome**：19222，用 `scripts/launch-scrape-chrome.vbs` 起（启动带 `--mute-audio` 全程静音；取流完自动关，见流程「关闭采集 Chrome」）
 - **中文路径**（仓库路径含中文时）：transcribe.py 自动 subst 盘符绕过；ASCII 路径（如默认）不触发，无需关心
 
 ## 调用约定
@@ -30,24 +30,24 @@ description: 把抖音/B站/本地视频转成文字并整理成知识笔记。�
 - 拿不准 → 问用户，别猜
 
 ### 【启动采集 Chrome】（抖音/B站公共前置；本地路线跳过）
-chrome-devtools MCP 配的是 `--browserUrl=http://127.0.0.1:9222`（只连已有实例，**自己不起 Chrome**）。取流前必须确保 9222 在监听——没开 chrome-devtools 全废。
+chrome-devtools MCP 配的是 `--browserUrl=http://127.0.0.1:19222`（只连已有实例，**自己不起 Chrome**）。取流前必须确保 19222 在监听——没开 chrome-devtools 全废。
 
 **一条命令**（脚本内部自动探活→没开才 wscript 起 vbs→等+复探活，幂等）：
 ```
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/launch-scrape-chrome.ps1
 ```
-看 stdout：`READY ...` = 9222 就绪，继续取流；`FAILED ...` = 起不来，**立即停下向用户报告**"采集 Chrome 启动失败，9222 未就绪"，**绝不自行诊断**（见禁止清单）。
+看 stdout：`READY ...` = 19222 就绪，继续取流；`FAILED ...` = 起不来，**立即停下向用户报告**"采集 Chrome 启动失败，19222 未就绪"，**绝不自行诊断**（见禁止清单）。
 
 **关键**：必须用**相对路径** `scripts/launch-scrape-chrome.ps1`（cwd 是仓库根，相对路径无中文）。**绝不**在 bash 命令行里写中文路径调 powershell/cmd/wscript——仓库路径含中文，bash(UTF-8)→powershell(GBK) 会让中文乱码，Chrome 根本不会被启动（06-27 那次 `ask hard-timeout` 就栽在这：Chrome 压根没起来，claude 又没早停，自由诊断 chrome.exe 卡死 15 分钟）。
 
 ### 【抖音】取流（详见 references/douyin-fetch.md）
-0. 前置：先【启动采集 Chrome】确认 9222 就绪
+0. 前置：先【启动采集 Chrome】确认 19222 就绪
 1. chrome-devtools `navigate_page` 到抖音链接（短链跳转后从最终 URL 取 aweme_id）
 2. chrome-devtools `evaluate_script` 执行 **douyin-fetch.md 里的取流 JS（整段照抄，别改；JS 开头已含静音行）** → 拿 play_url
 3. → 【关闭采集 Chrome】→ 【下载+转写】
 
 ### 【B站】取流（详见 references/bili-fetch.md）
-0. 前置：先【启动采集 Chrome】确认 9222 就绪
+0. 前置：先【启动采集 Chrome】确认 19222 就绪
 1. chrome-devtools `navigate_page` 到B站链接
 2. chrome-devtools `evaluate_script` 执行 **bili-fetch.md 里的取流 JS（整段照抄；JS 开头已含静音行）** → 拿 audio_url + subtitles
 3. **若有字幕（CC）**：下字幕 json 解析成文本（省 ASR），→ 【关闭采集 Chrome】→ 【整理笔记】
@@ -58,7 +58,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/launch-scrape-ch
 ```bash
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/close-scrape-chrome.ps1
 ```
-只关 9222 调试实例（按 profile/端口匹配），不碰日常 Chrome。【本地】路线没开浏览器，跳过此步。
+只关 19222 调试实例（按 profile/端口匹配），不碰日常 Chrome。【本地】路线没开浏览器，跳过此步。
 
 ### 【本地】
 直接用文件路径 → 【转写】（先 ffmpeg 转 16k mono wav）
@@ -95,7 +95,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/close-scrape-chr
 | 步骤 | 工具 | 用途 |
 |------|------|------|
 | 取流 | chrome-devtools `navigate_page` + `evaluate_script` | 拿直链（JS 开头含静音行；页面自动签名，绝不自己算签名） |
-| 关 Chrome | Bash + close-scrape-chrome.ps1 | 取流拿到直链/字幕后**立即关**采集 Chrome（只关 9222） |
+| 关 Chrome | Bash + close-scrape-chrome.ps1 | 取流拿到直链/字幕后**立即关**采集 Chrome（只关 19222） |
 | 下载 | Bash + download_audio.py | 直链 → 16k mono wav |
 | 转写 | Bash + transcribe.py | wav → txt（SenseVoice GPU + VAD） |
 | 整理 | Claude 读 txt 结构化 | txt → 笔记 |
@@ -108,7 +108,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/close-scrape-chr
 - ❌ **transcribe.py / download_audio.py 内部不改**（参数固定；中文路径脚本自动处理）
 - ❌ **直链不缓存**（有时效，每次现取现下）
 - ❌ **evaluate_script 只执行 reference 里给的取流 JS**（JS 开头已含静音行，执行取流即同时静音，无需额外静音调用）——不用它干别的（不 querySelector 找元素、不模拟点击、不截图找元素、不读页面文本）。取流 JS 之外的页面交互一律禁止。
-- ❌ **启动采集 Chrome / 取流 / 下载 连续失败 2 次**（含启动后 9222 端口复探活失败）：停下向用户报告原因，不死循环重试
+- ❌ **启动采集 Chrome / 取流 / 下载 连续失败 2 次**（含启动后 19222 端口复探活失败）：停下向用户报告原因，不死循环重试
 - ❌ **绝不自行诊断/换方式启动 Chrome**：启动只用 `launch-scrape-chrome.ps1`（相对路径调，它内部 wscript 起 vbs）。启动后端口复探活仍失败 → 立即停报告，**绝不**改用 cmd/headless、换版本子目录 exe、或在 bash 里直接调 `chrome.exe --version` 诊断（顶层 chrome.exe 是转发器，会挂住不返回；且 bash 命令行写中文路径调 powershell/cmd 会乱码——曾致整轮卡死 15 分钟触发 `ask hard-timeout`）
 - ❌ **笔记不直接写 knowledge/**：必须经 knowledge-write 二次确认
 - ❌ **模型不现下**：模型已在 `models/`，若缺失报错提示用户按 install.md 装，不自动联网下（慢且可能失败）

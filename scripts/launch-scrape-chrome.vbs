@@ -1,9 +1,13 @@
 ' launch-scrape-chrome.vbs
-' Launch a "debug mode" Chrome for web scraping: remote-debugging port 9222 + a
+' Launch a "debug mode" Chrome for web scraping: remote-debugging port 19222 + a
 ' dedicated persistent profile. Launched via VBS so there is NO console/CMD window
 ' to close (a .bat would leave a black window). Does not kill your main Chrome; the
 ' dedicated profile keeps its own login state, isolated from daily browsing.
-' Called by the web-scrape skill: probe 9222 first, run this only if it is down.
+' Called by the web-scrape skill: probe 19222 first, run this only if it is down.
+' Port 19222 (was 9222): must stay OUTSIDE the Windows TCP dynamic port range
+' (varies per machine; check: netsh int ipv4 show dynamicport tcp), else WinNAT
+' can randomly reserve it on boot and Chrome silently fails to bind it.
+' See the launch-scrape-chrome.ps1 header for the full story.
 '
 ' NOTE: keep this file ASCII-only. wscript reads a no-BOM .vbs as the system codepage
 ' (GBK on zh-CN), and non-ASCII comment bytes corrupt parsing.
@@ -36,7 +40,7 @@ If chrome = "" Then
 End If
 
 cmd = """" & chrome & """" & _
-      " --remote-debugging-port=9222" & _
+      " --remote-debugging-port=19222" & _
       " --user-data-dir=""" & profile & """" & _
       " --no-first-run --no-default-browser-check" & _
       " --mute-audio"

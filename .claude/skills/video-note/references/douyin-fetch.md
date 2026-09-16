@@ -5,7 +5,7 @@
 > 铁律：**绝不脱离浏览器自己算 a_bogus**（维护地狱）。只在页面里 fetch，让 SDK 补签名——抖音怎么改签名都不影响（浏览器永远对）。
 
 ## 前置
-- 用 `launch-scrape-chrome.vbs` 起专用 Chrome（9222），它有 fresh cookie。
+- 用 `launch-scrape-chrome.vbs` 起专用 Chrome（19222），它有 fresh cookie。
 - 抖音不强制登录，专用 profile 的匿名 session cookie 就够。
 
 ## 取流步骤（Claude 用 chrome-devtools 工具执行）

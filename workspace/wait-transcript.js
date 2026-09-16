@@ -5,7 +5,7 @@
 // 修复记录（2026-06-18）：
 //   旧版 hasRead 只查 aria-label==='朗读'，但豆包页面"朗读"写在 innerText，导致永远判 false → 误超时报 TRANSCRIPT_FAIL。
 //   现在 aria-label 与 innerText 都查；并加 doneMarker（"任务已完成"）做第二完成信号，双保险。
-const http = 'http://127.0.0.1:9222';
+const http = 'http://127.0.0.1:19222';
 
 async function getDoubaoWsUrl() {
   const res = await fetch(http + '/json');

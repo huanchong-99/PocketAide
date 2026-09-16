@@ -380,22 +380,25 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
   const crashTimes = [];           // 崩溃时刻滑窗(60s)：频繁崩则放弃 resume、改开全新会话
   const seen = new Set();
 
-  // 构造喂给 claude 的图片 prompt：绝对路径 + 可选附言。
-  // 理解方式(重要)：优先用图片理解 MCP(analyze_image, 返回文本描述、不依赖模型多模态注入,
-  //   从而绕过 PTY 环境下 Read 视觉不生效的命门)；仅当该 MCP 不可用时才回退到 Read 的模型视觉。
+  // 构造喂给 claude 的图片 prompt：绝对路径 + 可选附言 + 工具指引。
+  // 识不识图交给 claude 按当前任务/skill 自主判断——bridge 不做业务黑白名单(用户说法无穷,
+  // 列不完、也轮不到 bridge 判断)。只给工具指引:本环境(PTY)下 Read 的视觉不生效, 真要"看到"
+  // 图必须走 analyze_image MCP; 但不强制识图——需要看图才识(如看图说话、读图表), 只需当附件
+  // (如票据留档、文档插图归档)就不识, 由 claude 看 skill/任务目标自己拿捏。
   function buildImagePrompt(imagePaths, text) {
     const paths = Array.isArray(imagePaths) ? imagePaths : [imagePaths];
     const multi = paths.length > 1;
     const list = paths.map((p, i) => '图' + (i + 1) + ': ' + p).join('\n');
-    const base =
-      '用户发来 ' + paths.length + ' 张图片，本地路径：\n' + list +
-      '\n\n【如何理解这些图（按顺序，重要）】' +
-      '1) 对每张图分别调用图片理解 MCP 工具 analyze_image（image_source = 该图的本地路径），逐张理解；' +
-      (multi ? '2) 这是多张图，全部理解后再综合对比/关联，一起回答；' : '2) 理解后回答；') +
-      '3) 仅当该 MCP 不可用时，才改用 Read 工具的模型自带视觉逐张查看。';
     const t = (text || '').trim();
-    if (t) return base + '\n\n用户附言：' + t;
-    return base + '\n\n（这是用户单发图片，没有附加文字。请理解后' + (multi ? '并综合' : '') + '简要描述并回应。）';
+    let p = '用户发来 ' + paths.length + ' 张图片，本地路径：\n' + list;
+    if (t) p += '\n\n用户附言：' + t;
+    p += '\n\n这些图要不要识别、怎么用，由你按当前任务/skill 自主判断（别无脑识图，也别该识时漏识）：' +
+      '\n- 需要理解图片内容时（看图说话、读图表、认物体等），用图片理解 MCP 工具 analyze_image（image_source = 该图本地路径）逐张识别' +
+      (multi ? '，多张图全识别后再综合对比/关联；' : '；') +
+      '\n- 注意：本环境（PTY）下 Read 的视觉不生效，识图必须走 analyze_image、别用 Read 看图；analyze_image 不可用才回退。' +
+      '\n- 只需把图当附件时（如票据留档、文档插图归档等），按对应 skill/任务流程处理，不必识别图片内容。' +
+      '\n- 拿不准要不要识图，看当前 skill 或任务目标决定；仍模糊就问用户。';
+    return p;
   }
   // 聚合窗口结束：把攒下的所有图路径(+字)合成一条 prompt 入队。图字顺序无关，窗口内到齐就发。
   function flushAgg() {
@@ -464,13 +467,9 @@ const WAKEUP_PROMPT = '系统刚刚重启。请你只用一两句话简要汇报
         }
       } finally {
         pendingCount = Math.max(0, pendingCount - 1);  // 本条收尾(成功/失败/中断都减), 排队计数回落
-        if (imagePath) {                                 // 图片临时文件：本轮答完(claude 已 Read)即删, 不残留; workspace/tmp TTL 兜底
-          const imgPaths = Array.isArray(imagePath) ? imagePath : [imagePath];
-          for (const p of imgPaths) {
-            if (rmFileSync(p)) log('临时图片已删:', p);
-            else log('⚠️ 临时图片删除失败(将由 TTL 清理):', p);
-          }
-        }
+        // 不在每轮后立即删 feishu-img 临时图：多轮流程(先汇报等用户确认、第二轮才提交上传图)
+        // 需要图跨轮存活, 第一轮答完就删会让第二轮没图可传(实测 upload 0b 失败)。这些图本就在
+        // workspace/tmp(已 gitignore), 交给 TTL 按龄清理兜底(6h 巡检 / 留存 7 天), 不在此处主动删。
       }
     }
     processing = false;

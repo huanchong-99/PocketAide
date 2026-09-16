@@ -163,7 +163,7 @@ node tools/switch/switch.js restart           # 不改配置, 只让在跑的会
 
 skill 只有"被加载正文"才起作用——光从上面索引表"知道有这个 skill"不算用。以下场景**必须先调 Skill 工具加载对应 SKILL.md 正文，再按它的唯一路径走**，不许凭"我觉得捷径更省"自主绕开：
 
-- **用户发网页链接要抓内容**（总结帖子 / 提取评论 / 采集正文 / 看页面 / "这链接讲啥"）→ **必须**加载 `web-scrape` skill 走，**禁止**直接 WebFetch / WebSearch 捷径。碰到登录墙或 9222 连不上 → 按 skill 第 1 步 `scripts/launch-scrape-chrome.ps1` 起浏览器，**不许退回** WebFetch。
+- **用户发网页链接要抓内容**（总结帖子 / 提取评论 / 采集正文 / 看页面 / "这链接讲啥"）→ **必须**加载 `web-scrape` skill 走，**禁止**直接 WebFetch / WebSearch 捷径。碰到登录墙或 19222 连不上 → 按 skill 第 1 步 `scripts/launch-scrape-chrome.ps1` 起浏览器，**不许退回** WebFetch。
   - 理由：WebFetch 到不了用户的登录会话、拿不全登录后内容；claude 觉得"WebFetch 更省"是省自己、亏用户。实测翻车（2026-06-27 抓 linux.do，claude 绕开 web-scrape 用 WebFetch，Chrome 没起也没去启动，评论区抓不全）。
 - **视频转写** → `video-note`（已明确，见上）。
 

@@ -14,17 +14,17 @@ description: >-
 这个 skill 只负责一条**固定通道**：把调试 Chrome 开到目标网页、连上浏览器 MCP，让你能像人坐在浏览器前一样操作这一页。
 **到了页面之后具体做什么，由用户随链接发来的那句话决定**——这一步本 skill 不写死，因为需求是开放的：可能是"总结这帖讲了啥"，可能是"把 3 楼那个叫 X 的评论收下来"，也可能是"这页有个表格，导出来"。你照那句话做即可；只有一个链接、没指令时，默认抓主正文并简述。
 
-浏览器 MCP 是本项目 `.mcp.json` 里的 **`chrome-devtools`**（连 `127.0.0.1:9222`），它在这一页**什么都能做**：读 a11y 文本、跑 JS 精确取数、点击、填表、截图、翻页。
+浏览器 MCP 是本项目 `.mcp.json` 里的 **`chrome-devtools`**（连 `127.0.0.1:19222`），它在这一页**什么都能做**：读 a11y 文本、跑 JS 精确取数、点击、填表、截图、翻页。
 
-## 第 1 步：确保调试 Chrome 已起（端口 9222）
+## 第 1 步：确保调试 Chrome 已起（端口 19222）
 
-**一条命令**（脚本内部自动探活 9222 → 没开才 wscript 起 vbs → 等 + 复探活，幂等）：
+**一条命令**（脚本内部自动探活 19222 → 没开才 wscript 起 vbs → 等 + 复探活，幂等）：
 
 ```bash
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/launch-scrape-chrome.ps1
 ```
 
-看 stdout：`READY ...` = 9222 就绪，进第 2 步；`FAILED ...` = 起不来，停下向用户报告"采集 Chrome 启动失败，9222 未就绪"，**不要**自己换方式诊断（见边界）。
+看 stdout：`READY ...` = 19222 就绪，进第 2 步；`FAILED ...` = 起不来，停下向用户报告"采集 Chrome 启动失败，19222 未就绪"，**不要**自己换方式诊断（见边界）。
 
 **关键**：必须用**相对路径** `scripts/launch-scrape-chrome.ps1`（cwd 是仓库根，相对路径无中文）。**绝不**在 bash 命令行里写中文路径调 powershell/cmd/wscript——仓库路径含中文时，bash(UTF-8)→powershell(GBK) 会让中文乱码、wscript 找不到 vbs、Chrome 根本不会被启动。
 
@@ -56,7 +56,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/launch-scrape-ch
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/close-scrape-chrome.ps1
 ```
 
-它只关"调试实例"（按 9222 / 专用 profile 匹配），**不碰用户的日常 Chrome**。
+它只关"调试实例"（按 19222 / 专用 profile 匹配），**不碰用户的日常 Chrome**。
 例外：如果用户正在该窗口里登录、或明确说要留着继续看，就**别关**。
 
 ## 边界
