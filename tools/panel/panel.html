@@ -130,6 +130,17 @@
   .qbox.drag{border-color:var(--acc);background:var(--ivory-dark)}
   .qbox h3{margin:0 0 4px;font-size:13px}
   .qhint{color:var(--dim);font-size:11.5px;margin-bottom:9px}
+  /* 收口区：做完/不做了。虚线边框是"这里是个投放口"的通用语汇，和上面四个实心格子区分开 */
+  .quadbin{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+  .qbin{border:1px dashed var(--line);border-radius:12px;padding:12px 14px;display:flex;
+    align-items:baseline;gap:10px;color:var(--dim);font-size:13px;flex-wrap:wrap}
+  .qbin b{color:var(--fg);font-weight:600}
+  .qbin.drag{border-color:var(--acc);border-style:solid;background:var(--ivory-dark);color:var(--fg)}
+  /* 列头上的归档入口。默认低调，悬上去才变重——它是破坏性操作，不该抢眼到让人误点 */
+  .colact{color:var(--dim);text-decoration:none;border:1px solid var(--line);border-radius:7px;
+    padding:2px 8px;font-size:11.5px;font-weight:400;white-space:nowrap}
+  .colact:hover{color:var(--fg);border-color:var(--acc)}
+  .colact.armed{color:var(--bad);border-color:var(--bad)}
 
   /* 列表 */
   table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
@@ -138,6 +149,21 @@
   th:hover{color:var(--fg)}
   tr:last-child td{border-bottom:0}
   tbody tr{cursor:pointer} tbody tr:hover{background:var(--ivory-light)}
+
+  /* 体检 */
+  .hsum{padding:11px 14px;border-radius:10px;font-size:13px;margin:0 0 4px;border:1px solid var(--line)}
+  .hsum.ok{background:var(--ok-bg,var(--card2));color:var(--ok)}
+  .hsum.bad{background:var(--card2);color:var(--fg)}
+  /* 全清的区压成一行，不再用整块空白告诉你"这里没事"——四个空区读下来像四条坏消息 */
+  .hok{color:var(--dim);font-size:12.5px;padding:2px 2px 6px}
+  td.hacts{text-align:right;white-space:nowrap;width:1%}
+  .hact{color:var(--dim);text-decoration:none;border:1px solid var(--line);border-radius:7px;
+    padding:2px 8px;font-size:11.5px;margin-left:6px;display:inline-block}
+  .hact:hover{color:var(--fg);border-color:var(--acc)}
+  td .hact:first-child{margin-left:0}
+  /* 标题那一格的链接是普通文字样式，别被上面的按钮框套住 */
+  td>a.hact:not([data-hact]){border:0;padding:0;margin:0;color:var(--fg);font-size:12.5px}
+  td>a.hact:not([data-hact]):hover{color:var(--acc)}
 
   /* 分组 */
   .grp{margin-bottom:18px}
@@ -241,6 +267,9 @@
     /* 必须 minmax(0,1fr) 而不是 1fr —— 同一个坑栽过两次：1fr 的下限是 auto(内容最小宽度)，
        单列时列会被卡片内容顶到比视口还宽，整页横向溢出。已有测试钉死这条。 */
     .quad{grid-template-columns:minmax(0,1fr)}
+    /* 收口区在手机上直接不显示：HTML5 拖拽在触屏上根本不触发，
+       摆两个写着"拖进来"的框只会让人戳半天。手机上点开任务改状态即可。 */
+    .quadbin{display:none}
     .grp .cards{grid-template-columns:minmax(0,1fr)}
     .only-narrow{display:inline}
     .only-wide{display:none}
@@ -316,6 +345,24 @@
   <div class="row">
     <button id="nCancel">取消</button>
     <button id="nOk" class="primary">创建</button>
+  </div>
+</div>
+
+<!--
+  拖进「紧急」那两格时要补的截止日。
+  以前拖左半边（重要且紧急 / 不重要但紧急）等于白拖：drop 只改优先级，而"紧急"是按截止日
+  算出来的，卡片于是当场弹到右边那格去。四个格子有两个根本放不进东西。
+  现在拖左边会问一句"那截止日定几号"——紧急依旧由截止日客观决定，但你拖的那一下真的算数。
+-->
+<div class="dlg" id="quadDlg">
+  <h3 id="qdTitle"></h3>
+  <div class="sub" id="qdWhy" style="margin:-8px 0 14px;line-height:1.6"></div>
+  <div class="row" id="qdQuick" style="justify-content:flex-start;flex-wrap:wrap;margin-bottom:10px"></div>
+  <div class="fields"><label>或自己选个日期</label><input id="qdDate" type="date"></div>
+  <div class="row">
+    <button id="qdSkip">只改优先级</button>
+    <button id="qdCancel">取消</button>
+    <button id="qdOk" class="primary">确定</button>
   </div>
 </div>
 
@@ -592,13 +639,22 @@ function banners() {
   return out.join('');
 }
 
+/** 归档只放行这两个状态——和服务端 tasks.archive 的安全底线一致：未完成的绝不归档。 */
+const ARCHIVABLE = ['done', 'cancelled'];
+
 function renderBoard() {
   const ts = visible('active');
   return '<div class="cols">' + ST_ORDER.map((s) => {
     const list = ts.filter((t) => t.status === s)
       .sort((a, b) => (b.staleDays || 0) - (a.staleDays || 0));
+    // 已完成/已取消堆在看板上只会挡住在做的事。归档功能一直有，但只能一个个点开抽屉里归，
+    // 于是没人用，看板就一直被占着。列头直接给一个「归档这 N 个」。
+    const arch = ARCHIVABLE.includes(s) && list.length
+      ? '<a href="#" class="colact" data-arch="' + s + '" title="把这一列全部归档：详情删掉、只留摘要，之后在「归档」页看">归档 ' + list.length + ' 个</a>'
+      : '';
     // 列头在 .col 上、卡片在 .colbody 里：滚动只发生在 .colbody，列头就自然一直在。
-    return '<div class="col" data-status="' + s + '"><h3><b>' + ST_CN[s] + '</b><span>' + list.length + '</span></h3>' +
+    return '<div class="col" data-status="' + s + '"><h3><b>' + ST_CN[s] + '</b>' +
+      '<span>' + arch + (arch ? '' : list.length) + '</span></h3>' +
       '<div class="colbody">' +
       (list.length ? list.map(cardHtml).join('') : '<div class="empty">空</div>') +
       '</div></div>';
@@ -625,11 +681,17 @@ function renderQuad() {
       ' · ' + list.length + ' 个</div>' +
       (list.length ? list.map(cardHtml).join('') : '<div class="empty">空</div>') + '</div>';
   };
-  return '<div class="quad">' + QUAD.map(box).join('') + '</div>' +
+  // 四象限只管"该先做哪个"，做完了却没处放——看板有「已完成」「已取消」两列可以拖进去，
+  // 这边一个都没有，于是任务只能一直躺在格子里，四象限越用越脏。补两个收口。
+  const bin = '<div class="quadbin">' +
+    '<div class="qbin" data-done="done"><b>✓ 做完了</b><span class="sub">拖进来 → 标记「已完成」</span></div>' +
+    '<div class="qbin" data-done="cancelled"><b>✕ 不做了</b><span class="sub">拖进来 → 标记「已取消」</span></div>' +
+    '</div>';
+  return '<div class="quad">' + QUAD.map(box).join('') + '</div>' + bin +
     (un.length ? '<div class="sec">未分类 <span class="sub">（' + un.length +
       ' 个还没设优先级；<span class="only-wide">拖进上面任一象限即可</span>' +
       // 触屏上 HTML5 拖拽根本不触发，不能给手机用户一句"拖进去"然后让他戳半天
-      '<span class="only-narrow">点开任务改优先级</span>，紧急与否按截止日自动算）</span></div>' +
+      '<span class="only-narrow">点开任务改优先级、改状态</span>，紧急与否按截止日自动算）</span></div>' +
       '<div class="grp"><div class="cards">' + un.map(cardHtml).join('') + '</div></div>' : '');
 }
 
@@ -682,24 +744,68 @@ function renderGroup() {
   }).join('');
 }
 
+/**
+ * 体检页。
+ *
+ * 原来这页只是把问题列出来就完了：看见"停滞 93 天"，你能做的只有点进抽屉自己改。
+ * 更别扭的是两个空区各占一大块屏说"没有逾期任务"，而真正有内容的两区和顶部横幅
+ * 完全重复——整页读下来全是"你有问题"，却一个能动手的地方都没有。
+ *
+ * 现在：每条都带**可以当场点掉的处理动作**；空区压成一行；顶部给一句总结，
+ * 全清了就明确说"没发现问题"，而不是让人从四个空区里自己推断。
+ */
 function renderHealth() {
   const h = S.health;
   if (!h) return '<div class="empty">无数据</div>';
-  const sec = (title, rows, empty) =>
-    '<div class="sec">' + title + '</div>' +
-    (rows.length ? '<table><tbody>' + rows.join('') + '</tbody></table>' : '<div class="empty">' + empty + '</div>');
-  return sec('⏳ 停滞超过 ' + h.staleThreshold + ' 天（进行中）',
-      h.stale.map((x) => '<tr data-name="' + esc(x.name) + '" data-bucket="active"><td>' + esc(x.title) +
-        '</td><td style="text-align:right;color:var(--warn)">' + x.days + ' 天</td></tr>'), '没有停滞任务') +
-    sec('⛔ 已逾期',
-      h.overdue.map((x) => '<tr data-name="' + esc(x.name) + '" data-bucket="active"><td>' + esc(x.title) +
-        '</td><td style="text-align:right;color:var(--bad)">逾期 ' + (-x.left) + ' 天</td></tr>'), '没有逾期任务') +
-    sec('📅 7 天内到期',
-      h.dueSoon.map((x) => '<tr data-name="' + esc(x.name) + '" data-bucket="active"><td>' + esc(x.title) +
-        '</td><td style="text-align:right;color:var(--ok)">' + (x.left === 0 ? '今天' : '剩 ' + x.left + ' 天') + '</td></tr>'), '近 7 天没有到期任务') +
-    sec('🔁 疑似重复',
-      h.duplicates.map((g) => '<tr><td colspan="2">' + g.map((x) =>
-        '<a href="#" data-name="' + esc(x.name) + '" data-bucket="active">' + esc(x.title) + '</a>').join('　×　') + '</td></tr>'), '没有发现重复');
+
+  // 处理动作。每条问题都该能在这一页当场了结，而不是"记下来，回头去别处改"。
+  const act = (x, kind, label, title) =>
+    '<a href="#" class="hact" data-hact="' + kind + '" data-name="' + esc(x.name) +
+    '" data-bucket="active"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label + '</a>';
+  const openA = (x, label) => '<a href="#" class="hact" data-name="' + esc(x.name) +
+    '" data-bucket="active">' + (label || '打开') + '</a>';
+
+  const sec = (title, n, rows, empty) =>
+    '<div class="sec">' + title + (n ? ' <span class="sub">（' + n + '）</span>' : '') + '</div>' +
+    (rows.length ? '<table><tbody>' + rows.join('') + '</tbody></table>'
+      : '<div class="hok">✓ ' + empty + '</div>');
+
+  const trouble = h.stale.length + h.overdue.length + h.duplicates.length;
+  const head = '<div class="hsum ' + (trouble ? 'bad' : 'ok') + '">' +
+    (trouble ? '体检发现 <b>' + trouble + '</b> 处要处理 —— 每条右边都能直接点掉，不用再进抽屉'
+             : '✓ 体检没发现问题：没有停滞、没有逾期、没有疑似重复') + '</div>';
+
+  return head +
+    sec('⏳ 停滞超过 ' + h.staleThreshold + ' 天（进行中）', h.stale.length,
+      h.stale.map((x) => '<tr><td>' + openA(x, esc(x.title)) +
+        '</td><td style="text-align:right;color:var(--warn);white-space:nowrap">' + x.days + ' 天</td>' +
+        '<td class="hacts">' + act(x, 'done', '做完了', '标记为已完成') +
+        act(x, 'blocked', '卡住了', '标记为阻塞——停滞不是因为你忘了，是它推不动') +
+        act(x, 'cancelled', '不做了', '标记为已取消') + '</td></tr>'), '没有停滞任务') +
+
+    sec('⛔ 已逾期', h.overdue.length,
+      h.overdue.map((x) => '<tr><td>' + openA(x, esc(x.title)) +
+        '</td><td style="text-align:right;color:var(--bad);white-space:nowrap">逾期 ' + (-x.left) + ' 天</td>' +
+        '<td class="hacts">' + act(x, 'done', '做完了') +
+        act(x, 'post7', '顺延 7 天', '把截止日改到 7 天后') +
+        act(x, 'nodue', '去掉截止日') + '</td></tr>'), '没有逾期任务') +
+
+    sec('📅 7 天内到期', h.dueSoon.length,
+      h.dueSoon.map((x) => '<tr><td>' + openA(x, esc(x.title)) +
+        '</td><td style="text-align:right;color:var(--ok);white-space:nowrap">' +
+        (x.left === 0 ? '今天' : '剩 ' + x.left + ' 天') + '</td>' +
+        '<td class="hacts">' + act(x, 'done', '做完了') + '</td></tr>'), '近 7 天没有到期') +
+
+    // 重复这一组：横幅上早就能按「不是重复 ×」，体检页却只能干看着。同一件事两处行为不一致，
+    // 用户只会觉得"按了怎么还在"。这里用同一个 dkey，按掉两边一起消失。
+    sec('🔁 疑似重复', h.duplicates.length,
+      h.duplicates.map((g) => {
+        const k = dkey('dup', g.map((x) => x.name));
+        return '<tr><td colspan="2">' + g.map((x) => openA(x, esc(x.title))).join('　×　') + '</td>' +
+          '<td class="hacts">' + (isDismissed(k)
+            ? '<span class="sub">已按掉</span>'
+            : '<a href="#" class="hact bdismiss" data-key="' + esc(k) + '">不是重复</a>') + '</td></tr>';
+      }), '没有发现重复');
 }
 
 // ---------------------------------------------------------------- 抽屉
@@ -802,9 +908,12 @@ async function patch(name, bucket, p, label) {
 // ---------------------------------------------------------------- 事件绑定
 
 function wire() {
-  // 卡片 / 表格行 → 打开抽屉
-  document.querySelectorAll('#view .card, #view tbody tr, #view a[data-name]').forEach((el) => {
+  // 卡片 / 表格行 → 打开抽屉。
+  // :not([data-hact]) 很关键：体检页的处理按钮自己也带 data-name（要知道处理哪个任务），
+  // 不排掉的话点「做完了」会变成打开抽屉——按钮看着像坏的。
+  document.querySelectorAll('#view .card, #view tbody tr, #view a[data-name]:not([data-hact])').forEach((el) => {
     el.addEventListener('click', (e) => {
+      if (e.target.closest('[data-hact],[data-arch],.bdismiss')) return;   // 行里的动作键不当"打开"
       e.preventDefault();
       const n = el.dataset.name, b = el.dataset.bucket || 'active';
       if (n) open(n, b);
@@ -833,21 +942,73 @@ $('banners').addEventListener('click', async (e) => {
     return setFocus(set ? set.names : null, set ? set.label : '');
   }
   if (a.id === 'hideOffline') { offlineHidden = true; return render(); }
-  if (a.classList.contains('bdismiss')) {
-    const key = a.dataset.key;
-    if (S.offline) return toast('离线快照改不了，联机后再按', true);
-    // 先本地生效再落盘：等一个来回才消失会让人以为没点上
-    S.dismissed = Object.assign({}, S.dismissed, { [key]: { at: new Date().toISOString() } });
+  // 先本地生效再落盘：等一个来回才消失会让人以为没点上。体检页共用 doDismiss。
+  if (a.classList.contains('bdismiss')) return doDismiss(a.dataset.key);
+});
+
+/** 按掉一条提醒（横幅和体检页共用同一套 key，按一次两边一起消失）。 */
+async function doDismiss(key) {
+  if (S.offline) return toast('离线快照改不了，联机后再按', true);
+  S.dismissed = Object.assign({}, S.dismissed, { [key]: { at: new Date().toISOString() } });
+  render();
+  try {
+    await api('dismiss', { key });
+    toast(key.startsWith('dup:') || key.startsWith('dup') ? '已记下：这组不是重复' : '已按掉，这批任务有变化时会再提醒');
+  } catch (err) {
+    delete S.dismissed[key];
     render();
-    try {
-      await api('dismiss', { key });
-      toast(key.startsWith('dup:') ? '已记下：这组不是重复' : '已按掉，这批任务有变化时会再提醒');
-    } catch (err) {
-      delete S.dismissed[key];   // 没存上就退回去，别让人以为按掉了其实没有
-      render();
-      toast('按掉失败：' + err.message, true);
-    }
+    toast('按掉失败：' + err.message, true);
   }
+}
+
+/**
+ * 视图里的动作键（体检页的处理动作 + 看板列头的归档）。
+ * 视图每次 render 都重建，所以绑在 #view 容器上，别绑到具体元素。
+ */
+$('view').addEventListener('click', async (e) => {
+  const a = e.target.closest('a[data-hact], a[data-arch], #view .bdismiss');
+  if (!a) return;
+  e.preventDefault();
+
+  if (a.classList.contains('bdismiss')) return doDismiss(a.dataset.key);
+
+  // ── 列头「归档 N 个」──────────────────────────────────────────────
+  // 归档会删掉任务详情、只留摘要，删掉就找不回来了，所以要点两下：第一下变成"确定归档？"。
+  // 和抽屉里那个归档按钮同一套 armed 手法，行为一致，用户不用学第二遍。
+  if (a.dataset.arch) {
+    const st = a.dataset.arch;
+    if (S.offline) return toast('离线快照，改不了', true);
+    const list = visible('active').filter((t) => t.status === st);
+    if (!list.length) return;
+    if (!a.dataset.armed) {
+      a.dataset.armed = '1';
+      a.classList.add('armed');
+      a.textContent = '确定归档这 ' + list.length + ' 个？';
+      setTimeout(() => { if (a.isConnected && a.dataset.armed) render(); }, 5000);   // 超时自己缩回去
+      return;
+    }
+    let ok = 0; const bad = [];
+    for (const t of list) {
+      try { await api('archive', { name: t.name, bucket: t.bucket }); ok++; }
+      catch (err) { bad.push(t.title + '（' + err.message + '）'); }
+    }
+    await reload();
+    toast(bad.length ? '归档了 ' + ok + ' 个，' + bad.length + ' 个失败：' + bad[0] : '已归档 ' + ok + ' 个「' + ST_CN[st] + '」',
+      bad.length > 0);
+    return;
+  }
+
+  // ── 体检页的处理动作 ──────────────────────────────────────────────
+  const name = a.dataset.name, bucket = a.dataset.bucket || 'active';
+  const MAP = {
+    done: [{ status: 'done' }, '已标记「已完成」'],
+    blocked: [{ status: 'blocked' }, '已标记「阻塞」'],
+    cancelled: [{ status: 'cancelled' }, '已标记「已取消」'],
+    post7: [{ deadline: daysFromNow(7) }, '截止日已顺延到 ' + daysFromNow(7)],
+    nodue: [{ deadline: '' }, '截止日已去掉'],
+  };
+  const m = MAP[a.dataset.hact];
+  if (m) await patch(name, bucket, m[0], m[1]);
 });
 
 /** 看板拖拽：拖到另一列 = 改状态。 */
@@ -868,7 +1029,17 @@ function wireDragBoard() {
   });
 }
 
-/** 四象限拖拽：只设优先级。紧急与否由截止日客观算出，不靠拖。 */
+/**
+ * 四象限拖拽。
+ *
+ * 原来这里只设优先级，说法是"紧急与否由截止日客观算出，不靠拖"。原则没错，落地错了：
+ * 左半边那两格（重要且紧急 / 不重要但紧急）全是「紧急」，而拖动压根不碰截止日，
+ * 于是往左拖必然当场弹回右边——**四个格子有两个永远放不进东西**，用户只会以为拖拽坏了。
+ * 更糟的是唯一那句提示 toast 紧接着就被"优先级已设为…"的成功 toast 冲掉，等于没提示。
+ *
+ * 现在：优先级照旧直接落（这半边没歧义）；紧急与否对不上时，**问一句截止日定几号**，
+ * 然后优先级 + 截止日一次写入。紧急依然是截止日算出来的，但你拖的那一下真的算数。
+ */
 function wireDragQuad() {
   document.querySelectorAll('#view .qbox').forEach((box) => {
     box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('drag'); });
@@ -879,12 +1050,75 @@ function wireDragQuad() {
       const q = QUAD.find((x) => x.k === box.dataset.quad);
       if (!d.name || !q) return;
       const t = S.tasks.find((x) => x.name === d.name);
-      if (q.urgent && (!t || t.daysLeft == null)) {
-        toast('「紧急」是按截止日自动算的：给它设个 7 天内的截止日就会进这一格', true);
-      }
+      if (t && isUrgent(t) !== q.urgent) return openQuadDlg(t, q);
       patch(d.name, d.bucket, { priority: q.pri }, '优先级已设为「' + q.pri + '」');
     });
   });
+
+  // 收口区：做完了 / 不做了。四象限原来只能往里放、不能收，任务做完也只能一直躺在格子里。
+  document.querySelectorAll('#view .qbin').forEach((bin) => {
+    bin.addEventListener('dragover', (e) => { e.preventDefault(); bin.classList.add('drag'); });
+    bin.addEventListener('dragleave', () => bin.classList.remove('drag'));
+    bin.addEventListener('drop', (e) => {
+      e.preventDefault(); bin.classList.remove('drag');
+      const d = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
+      const st = bin.dataset.done;
+      if (!d.name || !st) return;
+      patch(d.name, d.bucket, { status: st }, '已改为「' + ST_CN[st] + '」');
+    });
+  });
+}
+
+/** 本地日期 → yyyy-mm-dd。不能用 toISOString()：那是 UTC，东八区傍晚之后会差一天。 */
+function ymd(dt) {
+  const p = (n) => String(n).padStart(2, '0');
+  return dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate());
+}
+const daysFromNow = (n) => { const dt = new Date(); dt.setDate(dt.getDate() + n); return ymd(dt); };
+
+let quadPend = null;
+
+/** 拖进的格子和任务当前的紧急状态对不上时，问清楚截止日再写。 */
+function openQuadDlg(t, q) {
+  quadPend = { t, q };
+  const toUrgent = q.urgent;
+  // 快捷项按方向给：要变紧急就给 7 天内的，要变不紧急就给推开 / 去掉
+  const quick = toUrgent
+    ? [['今天', daysFromNow(0)], ['3 天后', daysFromNow(3)], ['7 天后', daysFromNow(7)]]
+    : [['推到 14 天后', daysFromNow(14)], ['清除截止日', '']];
+
+  $('qdTitle').textContent = '放进「' + q.t + '」';
+  $('qdWhy').innerHTML = toUrgent
+    ? '「紧急」是按<b>截止日</b>算的——7 天内（含逾期）才算紧急，不是手工打的标。'
+      + '所以要放进这一格，得先给它一个 7 天内的截止日。'
+      + (t.deadline ? '<br>它现在的截止日是 <b>' + esc(t.deadline) + '</b>（还剩 ' + t.daysLeft + ' 天）。' : '<br>它现在<b>没有截止日</b>。')
+    : '它的截止日是 <b>' + esc(t.deadline || '(无)') + '</b>，还剩 <b>' + t.daysLeft + '</b> 天，所以算「紧急」。'
+      + '要放进这一格，得把截止日推开或者去掉。';
+
+  $('qdQuick').innerHTML = quick.map((x, i) =>
+    '<button data-qd="' + i + '" data-val="' + esc(x[1]) + '">' + x[0] + '</button>').join('');
+  $('qdQuick').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => applyQuad(b.dataset.val);
+  });
+  $('qdDate').value = toUrgent ? daysFromNow(3) : daysFromNow(14);
+  $('mask').classList.add('on');
+  $('quadDlg').classList.add('on');
+  $('qdDate').focus();
+}
+
+function closeQuadDlg() {
+  quadPend = null;
+  $('quadDlg').classList.remove('on');
+  if (!$('drawer').classList.contains('on')) $('mask').classList.remove('on');
+}
+
+/** 优先级和截止日一次写进去：两次 patch 会写两遍文件、弹两次 toast、还闪一下中间态。 */
+function applyQuad(deadline) {
+  if (!quadPend) return;
+  const { t, q } = quadPend;
+  closeQuadDlg();
+  patch(t.name, t.bucket, { priority: q.pri, deadline },
+    deadline ? '已放进「' + q.t + '」，截止日 ' + deadline : '已放进「' + q.t + '」，截止日已清除');
 }
 
 function wireDrawer() {
@@ -951,9 +1185,29 @@ $('dAdd').onclick = async () => {
 };
 $('dProg').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('dAdd').click(); });
 $('dClose').onclick = closeDrawer;
-// 遮罩和 Esc 现在服务两个浮层（抽屉 + 新建弹窗），关掉当前开着的那个
-const closeTop = () => { if ($('newDlg').classList.contains('on')) closeNewDlg(); else closeDrawer(); };
+// 遮罩和 Esc 服务三个浮层（抽屉 + 新建弹窗 + 四象限补截止日），关掉当前开着的那个。
+// 四象限那个排最前：它是拖拽当场弹出来的，盖在最上层，Esc 先关它才符合直觉。
+const closeTop = () => {
+  if ($('quadDlg').classList.contains('on')) closeQuadDlg();
+  else if ($('newDlg').classList.contains('on')) closeNewDlg();
+  else closeDrawer();
+};
 $('mask').onclick = closeTop;
+
+$('qdCancel').onclick = closeQuadDlg;
+// "只改优先级"= 保持原来的截止日不动，所以传 undefined 而不是 ''（''是"清除截止日")
+// "只改优先级"= 截止日保持不动，所以不传 deadline（传 '' 是"清除截止日"，两回事）。
+// 提示里要说清它最后落进了哪一格——你拖的是 A 格，它却停在 B 格，不解释一句就又成了"拖拽坏了"。
+$('qdSkip').onclick = () => {
+  const p = quadPend;
+  closeQuadDlg();
+  if (!p) return;
+  const land = QUAD.find((x) => (x.pri === '高') === (p.q.pri === '高') && x.urgent === isUrgent(p.t));
+  patch(p.t.name, p.t.bucket, { priority: p.q.pri },
+    '优先级已设为「' + p.q.pri + '」；截止日没动，所以它落在「' + (land ? land.t : '?') + '」');
+};
+$('qdOk').onclick = () => applyQuad($('qdDate').value);
+$('qdDate').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('qdOk').click(); });
 
 // ── 快捷键 ────────────────────────────────────────────────────────────
 // 电脑上这面板多半是常驻副屏、随手切过来看两眼的，一路摸鼠标点很别扭。
@@ -982,7 +1236,8 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault(); $('q').focus(); $('q').select(); return;
   }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
-  if ($('drawer').classList.contains('on') || $('newDlg').classList.contains('on')) return;
+  if ($('drawer').classList.contains('on') || $('newDlg').classList.contains('on')
+      || $('quadDlg').classList.contains('on')) return;
 
   if (e.key === '/') { e.preventDefault(); $('q').focus(); $('q').select(); }
   else if (e.key === '?') { e.preventDefault(); $('keys').classList.toggle('on'); }

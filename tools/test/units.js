@@ -721,6 +721,63 @@ test('U9 面板桌面: 整页锁死不滚, 滚动只发生在列内', () => {
   assert(!/function fitBoard/.test(html), '又出现了 JS 算看板高度的 fitBoard, 这条路已经证明会算错');
 });
 
+test('U9 面板四象限: 四个格子都要放得进去, 不能有两个是摆设', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  // 真出过事: 拖进左半边那两格(重要且紧急 / 不重要但紧急)必然弹回右边。
+  // 因为 drop 只写 priority, 而"紧急"是 daysLeft<=7 算出来的、拖动压根不碰截止日。
+  // 四个格子有两个永远放不进东西, 用户只会以为拖拽坏了。
+  const drop = /box\.addEventListener\('drop'[\s\S]*?\n {4}\}\);/.exec(html);
+  assert(drop, '找不到四象限的 drop 处理');
+  assert(/isUrgent\(t\) !== q\.urgent/.test(drop[0]),
+    'drop 没有比较"要放进的格子紧不紧急"和"任务实际紧不紧急", 往左拖必然落到右边');
+  assert(/openQuadDlg\(/.test(drop[0]), '对不上时没有任何补救, 卡片会静默落到别的格子里');
+
+  // 补救必须能真的改到截止日——只弹个提示还是放不进去
+  const dlg = /function openQuadDlg[\s\S]*?\n\}/.exec(html);
+  assert(dlg, '找不到 openQuadDlg');
+  assert(/daysFromNow\(/.test(dlg[0]), '补救弹窗没给具体日期选项');
+  assert(/priority: q\.pri, deadline/.test(html), '优先级和截止日没有一次写入(分两次写会闪中间态、弹两次提示)');
+
+  // 本地日期不能用 toISOString(): 那是 UTC, 东八区傍晚之后算出来差一天
+  assert(!/toISOString\(\)\.slice\(0,\s*10\)/.test(html), '用 UTC 截日期, 晚上操作会差一天');
+  assert(/function ymd\(/.test(html), '缺按本地时区取 yyyy-mm-dd 的函数');
+
+  // 四象限得有地方收口: 任务做完没处放, 只能一直躺在格子里
+  assert(/class="qbin"[^>]*data-done="done"/.test(html), '四象限缺「做完了」投放口');
+  assert(/data-done="cancelled"/.test(html), '四象限缺「不做了」投放口');
+  assert(/#view \.qbin/.test(html), '收口区没绑拖放事件');
+});
+
+test('U9 面板看板: 已完成/已取消要能一键归档, 别一直占着看板', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  assert(/const ARCHIVABLE = \['done', 'cancelled'\]/.test(html), '缺可归档状态白名单');
+  assert(/data-arch="/.test(html), '列头没有归档入口');
+  // 归档是破坏性的, 必须两步确认——和抽屉里那个归档按钮同一套 armed 手法
+  assert(/a\.dataset\.armed/.test(html), '列头归档没有二次确认, 一下点掉整列');
+  // 只有 done/cancelled 能出现归档键, 绝不能让进行中的任务被整列归掉
+  const board = /function renderBoard[\s\S]*?\n\}/.exec(html);
+  assert(board && /ARCHIVABLE\.includes\(s\)/.test(board[0]), '归档键没限定状态, 可能出现在进行中那列');
+});
+
+test('U9 面板体检: 每条问题都要能当场处理掉, 不能只是一张抱怨清单', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  const h = /function renderHealth[\s\S]*?\n\}/.exec(html);
+  assert(h, '找不到 renderHealth');
+  // 原来整页只列问题: 看见"停滞 93 天"只能点进抽屉自己改, 一个能动手的地方都没有
+  assert(/data-hact=/.test(h[0]), '体检页的问题没有可点的处理动作');
+  for (const k of ['done', 'blocked', 'cancelled', 'post7', 'nodue']) {
+    assert(new RegExp("'" + k + "'").test(html), '缺处理动作 ' + k);
+  }
+  // 疑似重复在横幅上能按掉、体检页却只能干看着——同一件事两处行为不一致
+  assert(/dkey\('dup'/.test(h[0]), '体检页的重复没用横幅同一套 key, 按掉不同步');
+  assert(/isDismissed\(k\)/.test(h[0]), '体检页没读按掉状态, 按掉了还会显示');
+  // 处理键自己带 data-name, 不排掉就会被"点行=打开抽屉"抢走, 按钮看着像坏的
+  assert(/a\[data-name\]:not\(\[data-hact\]\)/.test(html), '处理键会被"打开抽屉"的绑定抢走点击');
+  // 全清的区不该再用整块空白说"没有"——四个空区读下来像四条坏消息
+  assert(/class="hok"/.test(h[0]), '空区还是大块空白, 没压成一行');
+  assert(/class="hsum/.test(h[0]), '体检没有总结行, 全好的时候看不出"没问题"');
+});
+
 test('U9 面板桌面: 看板的列永远排成一行, 放不下横向滚而不是换行', () => {
   const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
   const flat = html.replace(/\s+/g, ' ');
