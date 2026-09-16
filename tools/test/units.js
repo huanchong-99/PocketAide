@@ -399,6 +399,95 @@ test('U8 webui 不许在人填表的时候自己退掉', () => {
   }
 });
 
+test('U8 切换: 默认只动飞书那端, 绝不顺手改用户自己的终端', () => {
+  // 真出过事：用户在托盘点「切换供应商」配了个第三方，全局 ~/.claude/settings.json 被一起
+  // 改掉，他正在对话的那个终端会话当场变成对方的订阅、还被结束，只能手工把两端全改回官方
+  // 才能继续干活。一个"配置我飞书机器人用哪家"的动作，不该有权限改写他整台机器的 claude。
+  const js = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'switch.js'), 'utf8');
+  const def = /const scopesOf = \(flag\) => \{\s*const v = flag \|\| '([a-z]+)'/.exec(js);
+  assert(def, '找不到 scopesOf 的默认作用端');
+  assert(def[1] === 'bridge', `--scope 默认是 ${def[1]}，会连用户的终端一起切`);
+
+  const webui = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.js'), 'utf8');
+  const uiDef = /scope: b\.scope \|\| '([a-z]+)'/.exec(webui);
+  assert(uiDef && uiDef[1] === 'bridge', `webui 的 use 默认作用端是 ${uiDef && uiDef[1]}，不是 bridge`);
+
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.html'), 'utf8');
+  // 页面上那个「切换」按钮走的请求里，绝不能硬编码 both
+  assert(!/api\('use',\s*\{[^}]*scope:\s*'both'/.test(html),
+    '页面把 scope 硬编码成 both——点一下「切换」就把用户的终端也换掉了');
+  assert(/scope: both \? 'both' : 'bridge'/.test(html), '页面没有把"只切桥接/两端一起切"分开');
+
+  // 真的跑一遍：预演切换只能落在 bridge 上
+  const out = execFileSync('node', ['tools/switch/switch.js', 'status', '--json'], { cwd: REPO, encoding: 'utf8' });
+  const cur = JSON.parse(out).current;
+  if (cur) {
+    const dry = execFileSync('node', ['tools/switch/switch.js', 'use', cur, '--dry-run', '--skip-check', '--json'],
+      { cwd: REPO, encoding: 'utf8' });
+    const scopes = (JSON.parse(dry).results || []).map((r) => r.scope);
+    assert(!scopes.includes('global'), '默认切换动了 global：' + scopes.join(','));
+  }
+});
+
+test('U8 切换: 结束了终端会话就必须把窗口还回来', () => {
+  const procsSrc = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'procs.js'), 'utf8');
+  const procs = require(path.join(REPO, 'tools', 'switch', 'procs.js'));
+  assert(typeof procs.relaunchTerminalSessions === 'function',
+    '只有 killTerminalSessions、没有 relaunch —— 切换等于"我帮你把窗口关了, 你自己想办法"');
+
+  // 重开必须原样：同一条命令行(含 -c 续会话)、同一个目录
+  assert(/parseCmd\(p\.cmd\)/.test(procsSrc), '重开没用原进程的命令行, 会丢掉 -c 之类的启动参数');
+  assert(/terminalCwds\(/.test(procsSrc), '重开没有反查工作目录, 会把人扔到别的目录去');
+  // 必须先取 cwd 再杀：进程没了就反查不出是哪几份存档属于终端会话
+  const body = /function relaunchTerminalSessions[\s\S]*?\n}/.exec(procsSrc);
+  assert(body, '找不到 relaunchTerminalSessions');
+  assert(body[0].indexOf('terminalCwds(') < body[0].indexOf('kill(p.pid)'),
+    'cwd 反查排在杀进程之后, 那时候已经查不到了');
+
+  // 命令行还原：带空格的路径必须整段保住，否则 C:\Program Files\... 会断成两截
+  const argv = procs.parseCmd('"C:\\Program Files\\x\\claude.exe" -c --dangerously-skip-permissions');
+  assert(argv[0] === 'C:\\Program Files\\x\\claude.exe', '带空格的可执行路径被拆坏了: ' + argv[0]);
+  assert(argv[1] === '-c' && argv[2] === '--dangerously-skip-permissions', '启动参数丢了: ' + argv.join(' '));
+  // cmd /k 见到命令以引号开头会吃掉首尾引号，必须用 call 起头挡住这条规则
+  assert(/'call ' \+ argv/.test(procsSrc), "重开命令没有用 call 起头, 带空格的路径会被 cmd /k 吃掉引号");
+
+  // webui 绝不能再传 include-self：它由托盘拉起、不在任何 claude 会话底下，
+  // CLAUDE_PID 为空 => selfPid() 是 null => "排除调用者自己"本来就是空操作，
+  // 再显式要求 includeSelf，就是点名要连用户正在对话的那个窗口一起杀。
+  const webui = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.js'), 'utf8');
+  assert(!/include-self.*includeSelf|includeSelf.*include-self/.test(webui),
+    'webui 还在传 include-self —— 它认不出哪个会话是用户自己的, 传这个等于点名要杀');
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.html'), 'utf8');
+  assert(!/includeSelf:\s*true/.test(html), '页面还在请求 includeSelf: true');
+  // 只盯用户真会看到的那句(带全角括号的那种)，别把说明为什么不这么写的注释也一起判死
+  assert(!/（需自行重开窗口）/.test(html), '页面还在让用户"自行重开窗口"');
+  assert(/已重开窗口/.test(html), '页面没有把"窗口已经替你开回来了"说出来');
+});
+
+test('U8 切换: 两端各用各的是正常的, 只有没人承认的不一致才算漂移', () => {
+  // 默认作用端改成 bridge 之后，"终端官方订阅 + 飞书第三方"成了常态。
+  // 这时候还照旧报红色「两端不一致」，就是我自己造出来的假警报——喊多了那六周的教训就白吃了。
+  const js = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'switch.js'), 'utf8');
+  assert(/store\.scopes/.test(js), '档案里没记每端被有意切成哪家, 无从区分"你安排的"和"漂移"');
+  assert(/notes\.push\(/.test(js), '没有 notes 通道, 能解释的不一致只能挤进 warnings 里当告警');
+
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  const st = sw.buildStatus();
+  assert(Array.isArray(st.notes), 'status 没有 notes 字段');
+  assert(st.intent && typeof st.intent === 'object', 'status 没有回传 intent');
+  const [g, b] = st.scopes;
+  if (g.exists && b.exists && (g.baseUrl || null) !== (b.baseUrl || null)
+      && st.intent.global === g.provider && st.intent.bridge === b.provider) {
+    assert(!st.warnings.some((w) => /两端/.test(w)),
+      '两端是分别切成这样的, 却还在报"两端不一致": ' + st.warnings.join(' | '));
+  }
+
+  // 桥接同步认的是 scopes.bridge，不是 current —— 只切了全局就改 current 的话，
+  // 桥接下次启动会被"同步"成用户根本没给它选的那家。
+  assert(/store\.scopes && store\.scopes\.bridge\) \|\| store\.current/.test(js),
+    'syncBridge 还在直接认 current, 只切全局也会把桥接带跑');
+});
+
 // ===== U9 任务面板：数据层无损 + 写入语义 + 双端联动 =====
 // 这组测试守的是同一件事：面板能改任务文件，而任务文件是用户的真资产。
 // 解析→写回只要有一丁点损耗，第一次拖卡片就会静默吃掉他手写的优先级链、引用块、wikilink。

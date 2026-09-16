@@ -140,6 +140,10 @@ function Show-Balloon([string]$Text) {
 }
 
 # Refresh the "Current: <provider> / <model>" line. Cheap enough to call on menu open.
+# Read the BRIDGE scope, not global: the tray drives the bridge end (switch.js defaults to
+# --scope bridge and deliberately leaves the user own terminal alone), and status.current is
+# the bridge provider. Pairing that name with the global scope model would print a combination
+# that exists nowhere - a third-party provider name next to the official subscription model.
 function Update-Provider {
   if (-not $global:miProvider) { return }
   $s = Invoke-SwitchJson 'status --json'

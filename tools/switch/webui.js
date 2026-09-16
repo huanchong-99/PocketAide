@@ -153,8 +153,10 @@ const API = {
    * 所以直接调 CMDS.use（和命令行同一条路径），把它的重启结果原样回给页面显示。
    */
   async use(b) {
-    const flags = { scope: b.scope || 'both' };
-    if (b.killTerminals) flags['kill-terminals'] = true;
+    // 默认只切桥接。这个页面是从托盘打开的，点「切换」的人想的是"换我飞书机器人用哪家"，
+    // 不是"把我整台机器的 claude 都换掉"——后者得在页面上单独、显式地点（scope: 'both'）。
+    const flags = { scope: b.scope || 'bridge' };
+    if (b.relaunchTerminals) flags['relaunch-terminals'] = true;
     if (b.force) flags.force = true;
     if (b.skipCheck) flags['skip-check'] = true;
     return sw.CMDS.use({ _: [b.name], flags });
@@ -170,8 +172,19 @@ const API = {
     return sw.CMDS.model({ _: [b.model], flags });
   },
 
+  /**
+   * 重启在跑的会话。
+   *
+   * ⚠ 这里**绝不**传 include-self。webui 由托盘拉起、不在任何 claude 会话底下，
+   * `procs.selfPid()` 只能拿到 null，"排除调用者自己"在这条路上本来就是空的；再叠一个
+   * include-self:true，就是明确要求连用户正在对话的那个窗口一起杀。真出过事。
+   * 现在终端端走 relaunch：杀完原样重开，所以即便命中了用户自己那个窗口，他也能拿回来。
+   */
   async restart(b) {
-    return sw.CMDS.restart({ _: [], flags: { scope: b.scope || 'bridge', 'include-self': Boolean(b.includeSelf) } });
+    const flags = { scope: b.scope || 'bridge' };
+    if (b.killOnly) flags['kill-only'] = true;
+    if (Array.isArray(b.pids) && b.pids.length) flags.pids = b.pids.join(',');
+    return sw.CMDS.restart({ _: [], flags });
   },
 
   /** 新增或整体更新一个供应商档。token 留空表示"不改动原有 Key"。 */

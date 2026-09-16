@@ -310,13 +310,28 @@ function buildStatus() {
   });
 
   const warnings = [];
+  const notes = [];
   const [g, b] = scopes;
 
+  /**
+   * 两端不一致要不要报警，取决于**是不是你自己切的**。
+   *
+   * 默认作用端已经是"只有桥接"（见 scopesOf），所以"终端跑官方订阅、飞书跑第三方"是
+   * 正常且常见的用法，不是故障。档案里 scopes.<端> 记着每一端最后一次是被有意切成哪家；
+   * 对得上 = 你安排的，降级成一条陈述；对不上或压根没记录 = 没人承认的漂移，才是那次
+   * 事故的形态，照旧报警。
+   */
+  const intent = store.scopes || {};
+  const owned = (s, name) => Boolean(name && s.provider && s.provider === name);
   if (g.exists && b.exists) {
-    if ((g.baseUrl || null) !== (b.baseUrl || null)) {
-      warnings.push(`两端供应商不一致：${g.label}=${g.baseUrl || '官方直连'}，${b.label}=${b.baseUrl || '官方直连'}`);
-    } else if (g.configuredModel !== b.configuredModel) {
-      warnings.push(`两端模型不一致：${g.label}=${g.configuredModel}，${b.label}=${b.configuredModel}`);
+    const deliberate = owned(g, intent.global) && owned(b, intent.bridge);
+    const differs = (g.baseUrl || null) !== (b.baseUrl || null);
+    if (differs || g.configuredModel !== b.configuredModel) {
+      const what = differs
+        ? `${g.label}=${g.baseUrl || '官方直连'}，${b.label}=${b.baseUrl || '官方直连'}`
+        : `${g.label}=${g.configuredModel}，${b.label}=${b.configuredModel}`;
+      if (deliberate) notes.push(`两端各用各的（你分别切过）：${what}`);
+      else warnings.push(`两端${differs ? '供应商' : '模型'}不一致：${what}（不是通过本工具切的，确认一下是不是漂移）`);
     }
   }
   for (const s of scopes) {
@@ -342,7 +357,7 @@ function buildStatus() {
       warnings.push(`${s.label} 声称官方直连，却残留 ${s.anthropicKeys.length} 个 ANTHROPIC_* 键：${s.anthropicKeys.join(', ')}`);
     }
   }
-  return { current: store.current || null, scopes, warnings };
+  return { current: store.current || null, intent, scopes, warnings, notes };
 }
 
 // ---------------------------------------------------------------- 连通性探活
@@ -404,6 +419,10 @@ function seedFromExisting() {
     catalog: ['opus[1m]', 'opus', 'sonnet', 'haiku'],
   };
 
+  // 播种时就把"每一端现在是哪家"记进 scopes：两端本来可以各用各的，体检要靠它区分
+  // "你有意分开摆的" 和 "没人承认的漂移"。播种看到的现状一律当作有意——这是用户自己的机器
+  // 原本的样子，不该一播种就先给他扣一顶漂移的帽子。
+  const scopesIntent = { global: 'official', bridge: 'official' };
   for (const [src, s] of [['global', glb], ['bridge', brg]]) {
     if (!s || !s.env || !s.env.ANTHROPIC_BASE_URL) continue;
     const env = Object.fromEntries(Object.entries(s.env).filter(([k]) => isAnthropicKey(k)));
@@ -414,10 +433,11 @@ function seedFromExisting() {
       env,
       catalog: [env.ANTHROPIC_MODEL].filter(Boolean),
     };
-    if (src === 'global') current = name;
+    scopesIntent[src] = name;
+    if (src === 'bridge') current = name;      // current = 桥接在用哪家（本工具的主语是桥接）
   }
-  if (!current) current = (glb && !((glb.env || {}).ANTHROPIC_BASE_URL)) ? 'official' : Object.keys(providers)[0];
-  return { current, providers };
+  if (!current) current = scopesIntent.bridge || 'official';
+  return { current, scopes: scopesIntent, providers };
 }
 
 function guessName(url) {
@@ -466,11 +486,14 @@ function syncBridge({ dryRun = false } = {}) {
   try {
     const store = readJson(STORE, null);
     if (!store || !store.current) return { ok: false, reason: '尚无供应商档案（未 init），本次不同步' };
-    const provider = store.providers[store.current];
-    if (!provider) return { ok: false, reason: `档案里没有 current=${store.current}` };
+    // 认桥接自己那条记录，不认 current：两端现在可以各用各的，若只切了全局就把 current 改了，
+    // 桥接下次启动会被"同步"成用户根本没给它选的那家。
+    const want = (store.scopes && store.scopes.bridge) || store.current;
+    const provider = store.providers[want];
+    if (!provider) return { ok: false, reason: `档案里没有 ${want}` };
     const r = applyToScope('bridge', provider, { dryRun });
     if (r.skipped) return { ok: false, reason: r.skipped };
-    return { ok: true, provider: store.current, model: r.modelAfter, changed: r.changed, removed: r.removed, added: r.added, dryRun };
+    return { ok: true, provider: want, model: r.modelAfter, changed: r.changed, removed: r.removed, added: r.added, dryRun };
   } catch (e) {
     return { ok: false, reason: e.message };
   }
@@ -484,6 +507,10 @@ function syncBridge({ dryRun = false } = {}) {
  *            用户在飞书那头几乎无感，故默认自动重启。
  *   终端端——没有守护进程替你重开窗口，杀了就真没了，且调用者自己往往就在其中一个里面，
  *            故默认只报告"这些还在用旧配置"，要真杀必须显式 --kill-terminals。
+ *
+ * `--relaunch-terminals` 是 `--kill-terminals` 的正确版本：结束之后**把窗口原样开回来**
+ * （同一命令行、同一目录、带 `-c` 续上会话）。只杀不开等于把用户撂在半路——他要的是
+ * "帮我重启"，不是"我帮你关了，你自己想办法"。能重开就默认走这条，别让人手动补。
  */
 function restartAfterSwitch(a, results) {
   const out = {};
@@ -492,17 +519,20 @@ function restartAfterSwitch(a, results) {
   else out.bridge = { ok: true, killed: [], note: '桥接端配置未变，无需重启' };
 
   const globalTouched = results.some((r) => r.scope === 'global' && !r.skipped && r.changed);
+  const opts = { includeSelf: Boolean(a.flags['include-self']) };
   if (!globalTouched) {
-    out.terminal = { killed: [], pending: [], note: '全局配置未变，终端会话无需处理' };
+    out.terminal = { killed: [], pending: [], note: '全局(终端)配置未变，终端会话不受影响' };
+  } else if (a.flags['relaunch-terminals']) {
+    out.terminal = procs.relaunchTerminalSessions(opts);
   } else if (a.flags['kill-terminals']) {
-    out.terminal = procs.killTerminalSessions({ includeSelf: Boolean(a.flags['include-self']) });
+    out.terminal = procs.killTerminalSessions(opts);
   } else {
     const s = procs.scan();
     const others = s.terminalClaude.filter((p) => p.pid !== s.self);
     out.terminal = {
       killed: [], pending: others.map((p) => p.pid),
       note: others.length
-        ? '这些终端会话仍在用旧配置（Claude Code 只在启动时读 settings）。加 --kill-terminals 结束它们，或自行重开窗口'
+        ? '这些终端会话仍在用旧配置（Claude Code 只在启动时读 settings）。加 --relaunch-terminals 结束并重开它们'
         : '没有其它终端会话',
     };
   }
@@ -523,8 +553,19 @@ function parseArgs(argv) {
   return out;
 }
 
+/**
+ * 作用端。**默认只有桥接**。
+ *
+ * 曾经默认 both，理由是"两端一起切才不会漂移"——方向错了。全局那份 settings 是**用户自己的
+ * 终端环境**，不归这套系统管：他在终端里跟 claude 聊着天，去托盘点一下"切到某第三方"，
+ * 结果自己正在说话的这个会话被一起换掉、还被结束，只能手工全部改回官方订阅才能继续。
+ * 一个"配置我的飞书机器人用哪家"的动作，不该有权限改写他整台机器的 claude。
+ *
+ * 防漂移靠的是**看得见**，不是**一起写**：`status` 照样体检两端、照样告警不一致（那次
+ * 事故真正缺的就是这个）。要动全局必须显式 `--scope global|both`，即"我知道我在动终端"。
+ */
 const scopesOf = (flag) => {
-  const v = flag || 'both';
+  const v = flag || 'bridge';
   if (v === 'both') return ['global', 'bridge'];
   if (SCOPES[v]) return [v];
   fail(`--scope 只能是 global | bridge | both，收到：${v}`);
@@ -562,7 +603,7 @@ const CMDS = {
    *   ③ 重启——Claude Code 只在启动时读一次 settings，不重启等于没切
    */
   async use(a) {
-    const name = a._[0] || fail('用法：use <供应商名> [--scope global|bridge|both] [--kill-terminals] [--no-restart] [--force]');
+    const name = a._[0] || fail('用法：use <供应商名> [--scope global|bridge|both] [--relaunch-terminals] [--no-restart] [--force]');
     const store = loadStore();
     const provider = getProvider(store, name);
     const dryRun = Boolean(a.flags['dry-run']);
@@ -576,19 +617,44 @@ const CMDS = {
       }
     }
 
-    const results = scopesOf(a.flags.scope).map((s) => applyToScope(s, provider, { dryRun }));
-    if (!dryRun) { store.current = name; saveStore(store); }
+    const applied = scopesOf(a.flags.scope);
+    const results = applied.map((s) => applyToScope(s, provider, { dryRun }));
+    if (!dryRun) {
+      // 记下"这一端是我有意切成这样的"。两端本来就可以、也应该能各用各的（默认就只切桥接），
+      // 所以"不一致"本身不再是故障——**没人承认的不一致**才是。体检据此区分，不然
+      // 每次正常切桥接都会跳一条红色"两端不一致"，喊多了就没人看了，那次事故的教训白吃。
+      store.scopes = store.scopes || {};
+      for (const s of applied) store.scopes[s] = name;
+      // 没切到的那端：把它此刻的实际状态记下来，当作"你本来就这么摆的"。不补的话，
+      // 第一次只切桥接就会立刻跳一条"两端不一致"——那是这次改动自己造出来的假警报。
+      for (const s of Object.keys(SCOPES)) {
+        if (store.scopes[s] === undefined) store.scopes[s] = matchProvider(store, readScopeState(s));
+      }
+      if (applied.includes('bridge')) store.current = name;   // current = 桥接在用哪家
+      saveStore(store);
+    }
 
     const restart = (!dryRun && !a.flags['no-restart']) ? restartAfterSwitch(a, results) : null;
     return { switched: name, label: provider.label, check, results, restart };
   },
 
-  /** 单独重启，不改配置。配置已对但会话还在跑旧的时用。 */
+  /**
+   * 单独重启，不改配置。配置已对但会话还在跑旧的时用。
+   * 终端端默认**结束并重开**（`--kill-only` 只结束不重开）——"重启"字面就该把窗口还回来。
+   */
   async restart(a) {
     const scopes = scopesOf(a.flags.scope);
+    const opts = {
+      includeSelf: Boolean(a.flags['include-self']),
+      pids: a.flags.pids ? String(a.flags.pids).split(',').map(Number).filter(Boolean) : null,
+    };
     const out = {};
     if (scopes.includes('bridge')) out.bridge = procs.restartBridgeSession();
-    if (scopes.includes('global')) out.terminal = procs.killTerminalSessions({ includeSelf: Boolean(a.flags['include-self']) });
+    if (scopes.includes('global')) {
+      out.terminal = a.flags['kill-only']
+        ? procs.killTerminalSessions(opts)
+        : procs.relaunchTerminalSessions(opts);
+    }
     return out;
   },
 
@@ -674,7 +740,7 @@ const CMDS = {
    * 只写它自己的最小基线）。两端天生独立，谁也不偷看谁——静默继承正是当初那次漂移事故的温床。
    * 想让飞书端跟本机保持一致，就点这一下；不点，永远不会自己发生。
    *
-   * 【为什么是覆盖不是合并】合并没法同步"删除"：本机把 ANTHROPIC_* 整组删掉切回官方订阅，
+   * 【为什么是覆盖不是合并】合并没法同步"删除"：本机把 ANTHROPIC_* 整组删掉切回官方，
    * 合并式同步传不过去，桥接就卡在旧供应商上——这正是旧 bridge/main.js 犯的错。
    * 整份覆盖则天然正确：本机什么样，桥接就什么样，多一个键少一个键都跟着走。
    *
@@ -720,6 +786,7 @@ const CMDS = {
       if (store) {
         matched = matchProvider(store, readScopeState('bridge'));
         store.current = matched;            // 认不出就置 null = "手工态/从本机复制"
+        store.scopes = { ...(store.scopes || {}), bridge: matched };
         saveStore(store);
       }
     } catch (_) {}
@@ -756,7 +823,12 @@ function renderRestart(rs) {
   }
   if (rs.terminal) {
     const t = rs.terminal;
-    if (t.killed && t.killed.length) L.push(`  终端：已结束 ${t.killed.join(', ')}（需自行重开窗口）`);
+    const ok = (t.reopened || []).filter((x) => x.ok);
+    if (t.killed && t.killed.length) {
+      L.push(`  终端：已结束 ${t.killed.join(', ')}` + (t.reopened ? '' : '（需自行重开窗口）'));
+    }
+    for (const x of ok) L.push(`  终端：已重开窗口 ${x.cwd}${t.guessedCwd ? '（目录是猜的，没反查到）' : ''}`);
+    for (const x of (t.reopened || []).filter((y) => !y.ok)) L.push(`  终端：重开失败 — ${x.reason}`);
     if (t.failed && t.failed.length) L.push(`  终端：结束失败 ${t.failed.join(', ')}`);
     if (t.skippedSelf) L.push(`  终端：跳过 pid ${t.skippedSelf}（调用者自己，不自杀）`);
     if (t.note) L.push(`  终端：${t.note}`);
@@ -780,7 +852,8 @@ function render(cmd, r) {
       if (s.anthropicKeys.length) L.push(`  ANTHROPIC_* ${s.anthropicKeys.length} 个：${s.anthropicKeys.join(', ')}`);
     }
     if (r.warnings.length) { L.push(''); L.push('⚠ 告警'); for (const w of r.warnings) L.push(`  - ${w}`); }
-    else { L.push(''); L.push('✓ 两端一致，无漂移'); }
+    else { L.push(''); L.push('✓ 无漂移'); }
+    if ((r.notes || []).length) { L.push(''); for (const n of r.notes) L.push(`  · ${n}`); }
   } else if (cmd === 'list') {
     L.push(`当前：${r.current || '(未设置)'}`);
     for (const p of r.providers) {
@@ -842,17 +915,18 @@ async function main() {
       '  copy-global [--dry-run] [--no-restart]        把本机全局配置整份复制到桥接（覆盖式，含第三方 Key）',
       '  list                                          列出所有供应商',
       '  status                                        双端体检：配置 vs 实跑 vs 漂移告警',
-      '  use <名称>                                    切换（先探活→再落盘→再重启，顺序不可调）',
+      '  use <名称>                                    切换桥接（先探活→再落盘→再重启，顺序不可调）',
       '  model <模型> [--alias opus|sonnet|haiku|reasoning] [--provider <名>]',
       '  check [名称...]                               连通性探活',
-      '  restart [--scope ...]                         不改配置，只让在跑的会话重读配置',
+      '  restart [--scope ...] [--kill-only]           不改配置，只让在跑的会话重读配置（终端端默认重开窗口）',
       '  ps                                            看在跑的会话进程（标出调用者自己）',
       '  add <名称> --url <u> --token <t> --model <m>  新增供应商',
       '  rm <名称>                                     删除供应商',
       '  example                                       重新导出脱敏模板',
       '',
-      '  --scope global|bridge|both   作用端，默认 both',
-      '  --kill-terminals             切换后结束终端会话（默认只结束桥接会话；调用者自己永不被杀）',
+      '  --scope global|bridge|both   作用端，默认 bridge（只管飞书那端；要动你自己的终端须显式指定）',
+      '  --relaunch-terminals         切换后结束终端会话并原样重开窗口（同目录、带 -c 续会话）',
+      '  --kill-terminals             只结束终端会话、不重开（会把你撂在没窗口的地方，一般别用）',
       '  --no-restart                 只改配置不动进程（改完不生效，需自行重启）',
       '  --force / --skip-check       探活失败仍切 / 直接跳过探活',
       '  --json                       输出机器可读 JSON',

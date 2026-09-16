@@ -35,7 +35,9 @@
   button:disabled{opacity:.45;cursor:not-allowed}
   button.primary{background:var(--accent);border-color:var(--accent);color:#06101f;font-weight:600}
   button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+  /* nowrap：按钮文字断成两行(「切换(飞 / 书)」)会把这一列撑高、也看不清在切什么 */
   .acts{display:flex;gap:6px;justify-content:flex-end}
+  .acts button{white-space:nowrap}
   label{display:block;margin:10px 0 4px;font-size:12.5px;color:var(--dim)}
   input{width:100%;padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:#0c0e13;color:var(--fg);font:13px Consolas,monospace}
   input:focus{outline:none;border-color:var(--accent)}
@@ -52,7 +54,8 @@
 <div class="wrap">
   <h1>供应商 / 模型切换</h1>
   <div class="sub">
-    切换 = <b>探活 → 落盘 → 重启</b>。Claude Code 只在启动时读一次配置，所以每次切换都会真的结束并重启会话，不是只改文件。
+    切换 = <b>探活 → 落盘 → 重启</b>。Claude Code 只在启动时读一次配置，所以每次切换都会真的结束并重启会话，不是只改文件。<br>
+    「切换」按钮<b>只动飞书那端</b>，不碰你自己的终端——要连终端一起换，切换完会另给一个明确的按钮。
   </div>
 
   <div class="row" id="scopes"></div>
@@ -161,10 +164,14 @@ function renderScopes(s) {
 
 function renderAlerts(s) {
   const w = s.status.warnings || [];
+  const notes = s.status.notes || [];
   const terms = (s.procs.terminalClaude || []).length;
   let html = '';
+  // 两端不一样**不等于**出事：默认就只切桥接，各用各的是正常用法。只有"没人承认的不一致"
+  // 才进 warnings（服务端按档案里记的 scopes 意图判定），能解释的走 notes，别拿红框喊狼来了。
   if (w.length) html += `<div class="warn-box">${w.map((x) => `<div>⚠ ${esc(x)}</div>`).join('')}</div>`;
-  else html += `<div class="ok-box">✓ 两端一致，无漂移</div>`;
+  else html += `<div class="ok-box">✓ 无漂移</div>`;
+  if (notes.length) html += `<div class="sub" style="margin-top:8px">${notes.map((x) => `<div>· ${esc(x)}</div>`).join('')}</div>`;
   html += `<div class="sub" style="margin-top:10px">桥接进程：${s.procs.bridgeUp ? '运行中' : '<span class="step-warn">未运行</span>'}
     ｜ 桥接会话 ${(s.procs.bridgeClaude || []).length} 个 ｜ 终端会话 ${terms} 个</div>`;
   $('alerts').innerHTML = html;
@@ -188,12 +195,12 @@ function renderTable(s) {
   }
   $('tbl').querySelector('tbody').innerHTML = s.providers.map((p) => `
     <tr class="${p.current ? 'cur' : ''}">
-      <td><b>${esc(p.label)}</b><br><span class="step-dim" style="font-size:12px">${esc(p.name)}${p.current ? ' · 当前' : ''}</span></td>
+      <td><b>${esc(p.label)}</b><br><span class="step-dim" style="font-size:12px">${esc(p.name)}${p.current ? ' · 飞书当前' : ''}</span></td>
       <td class="mono">${esc(p.baseUrl || '官方直连')}</td>
       <td class="mono">${esc(p.model || '-')}</td>
       <td class="mono">${p.hasToken ? esc(p.tokenMasked) : '<span class="step-dim">—</span>'}</td>
       <td><div class="acts">
-        <button data-act="use" data-n="${esc(p.name)}" ${p.current ? 'disabled' : ''}>切换</button>
+        <button data-act="use" data-n="${esc(p.name)}" title="只切飞书那端；你的终端不动" ${p.current ? 'disabled' : ''}>切换(飞书)</button>
         <button data-act="check" data-n="${esc(p.name)}">探活</button>
         <button data-act="edit" data-n="${esc(p.name)}">编辑</button>
         <button class="danger" data-act="del" data-n="${esc(p.name)}" ${p.current || p.name === 'official' ? 'disabled' : ''}>删除</button>
@@ -207,13 +214,20 @@ async function refresh() {
 }
 
 // ---- 切换：把三步过程逐条显示出来 ----
-async function doUse(name) {
+/**
+ * 默认 scope='bridge'：点「切换」只换飞书那端。
+ * 全局那份 settings 是用户自己的终端环境，不该被一个"配置我机器人"的按钮顺手改掉——
+ * 真出过事：用户在这页点了切换，正在对话的终端会话被一起换成第三方并结束，
+ * 只能手工把两端全改回官方订阅才能继续。要动终端必须再点一次下面那个显式按钮。
+ */
+async function doUse(name, scope) {
+  const both = scope === 'both';
   logClear();
-  logLine(`正在切换到 <b>${esc(name)}</b> …`, 'step-dim');
+  logLine(`正在把 <b>${both ? '飞书 + 终端两端' : '飞书那端'}</b> 切到 <b>${esc(name)}</b> …`, 'step-dim');
   const pending = logLine('<span class="spin">◐</span> ① 探活 → ② 写入配置 → ③ 重启会话', 'step-dim');
   let r;
   try {
-    r = await api('use', { name, scope: 'both' });
+    r = await api('use', { name, scope: both ? 'both' : 'bridge', relaunchTerminals: both });
   } catch (e) {
     pending.remove();
     logLine('✗ 切换被拒绝：' + esc(e.message), 'step-bad');
@@ -231,32 +245,62 @@ async function doUse(name) {
     logLine(`② ${esc(x.label)}：${x.changed ? '已写入' : '无变化'}　模型 ${esc(x.modelBefore || '-')} → ${esc(x.modelAfter || '-')}`
       + (x.removed.length ? `　<span class="step-dim">(删除 ${x.removed.length} 个旧键)</span>` : ''), x.changed ? 'step-ok' : 'step-dim');
   }
+  if (!both) logLine('② 全局(终端会话)：<b>未改动</b> — 本工具默认不碰你的终端，你开着的窗口照旧。', 'step-dim');
+
   const rs = r.restart || {};
   if (rs.bridge) {
     if (rs.bridge.ok === false) logLine(`③ 桥接：未重启 — ${esc(rs.bridge.reason)}`, 'step-warn');
     else if ((rs.bridge.killed || []).length) logLine(`③ 桥接：已结束会话 ${rs.bridge.killed.join(', ')}，桥接正在自动拉起新会话（新配置将在此刻生效）`, 'step-ok');
     else logLine(`③ 桥接：${esc(rs.bridge.note || '无需重启')}`, 'step-dim');
   }
-  if (rs.terminal) {
-    const t = rs.terminal;
-    if ((t.killed || []).length) logLine(`③ 终端：已结束 ${t.killed.join(', ')}（需自行重开窗口）`, 'step-ok');
-    if ((t.pending || []).length) {
-      logLine(`③ 终端：<b>${t.pending.length} 个终端会话仍在跑旧配置</b> — Claude Code 只在启动时读配置，它们不重启就不会生效。`, 'step-warn');
-      const d = logLine('', '');
-      const b = document.createElement('button');
-      b.className = 'danger'; b.textContent = `结束这 ${t.pending.length} 个终端会话`;
-      b.onclick = async () => {
-        b.disabled = true;
-        try {
-          const rr = await api('restart', { scope: 'global', includeSelf: true });
-          logLine(`③ 终端：已结束 ${(rr.terminal.killed || []).join(', ') || '(无)'}（需自行重开窗口）`, 'step-ok');
-        } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
-        refresh();
-      };
-      d.appendChild(b);
-    } else if (!(t.killed || []).length && t.note) logLine(`③ 终端：${esc(t.note)}`, 'step-dim');
+  if (rs.terminal) logTerminal(rs.terminal);
+
+  // 只切了桥接时，把"连终端一起切"作为一次**额外的、明说后果的**点击放在这儿。
+  // 放这儿而不是做成表格里第二个按钮：用户此刻正好在看切换结果，需要不需要连终端一起换，
+  // 这个当口最清楚；平时那一排按钮里多一个危险项，只会让人误点。
+  if (!both) {
+    const d = logLine('<span class="step-dim">终端也要换的话：</span>', '');
+    const b = document.createElement('button');
+    b.textContent = `把终端也切到 ${name}`;
+    b.title = '会改写 ~/.claude/settings.json，并结束+原样重开你的终端 claude 窗口（带 -c 续上会话）';
+    b.onclick = async () => {
+      b.disabled = true;
+      await doUse(name, 'both');
+    };
+    d.appendChild(b);
   }
   await refresh();
+}
+
+/** 终端端的处理结果。重点是把"重开了没有、开在哪"说清楚，别再只丢一句"需自行重开窗口"。 */
+function logTerminal(t) {
+  const reopened = (t.reopened || []).filter((x) => x.ok);
+  if ((t.killed || []).length) {
+    logLine(`③ 终端：已结束 ${t.killed.join(', ')}`, 'step-ok');
+    for (const x of reopened) {
+      logLine(`③ 终端：已重开窗口 <span class="mono">${esc(x.cwd)}</span>（原命令行 + <span class="mono">-c</span> 续上会话）`
+        + (t.guessedCwd ? ' <span class="step-warn">目录没反查到，开在了仓库根</span>' : ''), 'step-ok');
+    }
+    for (const x of (t.reopened || []).filter((y) => !y.ok)) logLine(`③ 终端：重开失败 — ${esc(x.reason)}`, 'step-bad');
+    if (t.reopened && !t.reopened.length) logLine('③ 终端：没有重开任何窗口', 'step-warn');
+  }
+  if ((t.failed || []).length) logLine(`③ 终端：结束失败 ${t.failed.join(', ')}`, 'step-bad');
+  if ((t.pending || []).length) {
+    logLine(`③ 终端：<b>${t.pending.length} 个终端会话仍在跑旧配置</b> — Claude Code 只在启动时读配置，不重启就不会生效。`, 'step-warn');
+    const d = logLine('', '');
+    const b = document.createElement('button');
+    b.textContent = `结束并重开这 ${t.pending.length} 个终端窗口`;
+    b.title = '结束后会用同样的命令行、同样的目录重新开窗口，并带 -c 续上原来的会话';
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const rr = await api('restart', { scope: 'global' });
+        logTerminal(rr.terminal || {});
+      } catch (e) { logLine('✗ ' + esc(e.message), 'step-bad'); }
+      refresh();
+    };
+    d.appendChild(b);
+  } else if (!(t.killed || []).length && t.note) logLine(`③ 终端：${esc(t.note)}`, 'step-dim');
 }
 
 document.addEventListener('click', async (ev) => {

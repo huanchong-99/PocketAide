@@ -89,12 +89,17 @@ python tools/kg/kg.py overview [--tag <标签>]      # 计数概览 total_nodes/
 
 ## 供应商 / 模型切换（底座，非 skill）
 
-这套系统用哪个供应商、哪个模型跑，由 `tools/switch` 管（**基础设施，不是技能**——它在桥接启动时就参与工作，`bridge/main.js` 每次拉起 claude 前都会调它落地配置）。它管**两端**：全局 `~/.claude/settings.json`（终端会话）+ `bridge/.claude-home/settings.json`（飞书会话）。
+这套系统用哪个供应商、哪个模型跑，由 `tools/switch` 管（**基础设施，不是技能**——它在桥接启动时就参与工作，`bridge/main.js` 每次拉起 claude 前都会调它落地配置）。
+
+它**看两端**、但**默认只切一端**：
+- **看**：全局 `~/.claude/settings.json`（终端会话）+ `bridge/.claude-home/settings.json`（飞书会话），`status` 两端都体检。
+- **切**：`--scope` 默认 `bridge`，**只动飞书那端**。全局那份是用户自己的终端环境，不归这套系统管；要动必须显式 `--scope global|both`。
+- 因此**两端不一样是正常的**（比如终端跑官方订阅、飞书跑第三方），不要见到不一致就当故障。档案 `providers.json` 的 `scopes` 记着每端最后一次是被有意切成哪家：对得上 = 用户安排的，`status` 归入 `notes`；对不上 = 没人承认的漂移，才进 `warnings`。
 
 ```bash
 node tools/switch/switch.js status --json     # 双端体检: 配置 vs 实跑 vs 漂移告警
 node tools/switch/switch.js list --json       # 列供应商
-node tools/switch/switch.js use <名称>         # 切换(自动: 探活→落盘→重启)
+node tools/switch/switch.js use <名称>         # 切换飞书端(自动: 探活→落盘→重启); 加 --scope both 才连终端一起切
 node tools/switch/switch.js model <模型名>     # 换模型(可带 --alias opus|sonnet|haiku|reasoning)
 node tools/switch/switch.js check <名称>       # 只探活不切
 node tools/switch/switch.js restart           # 不改配置, 只让在跑的会话重读
@@ -102,11 +107,11 @@ node tools/switch/switch.js restart           # 不改配置, 只让在跑的会
 
 用户问"现在用的什么模型 / 哪个配置"**一律先跑 `status`**，别靠读配置文件猜——配置文件写的和实跑的可能不一样（真出过事，见下）。`status` 会从会话存档反查实跑模型，两端不一致会直接告警。
 
-**用户要自己改配置时，告诉他走托盘**（不用敲命令）：托盘图标 →「切换供应商 ▸」直接切；要加/改供应商（填 Base URL / Key / 模型）→「供应商设置…」开本地网页填。网页按需起、只绑 127.0.0.1、随机端口 + 一次性 token，关掉标签页服务自动退出。
+**用户要自己改配置时，告诉他走托盘**（不用敲命令）：托盘图标 →「切换供应商（飞书端）▸」直接切；要加/改供应商（填 Base URL / Key / 模型）→「供应商设置…」开本地网页填。网页按需起、只绑 127.0.0.1、随机端口 + 一次性 token，关掉标签页服务自动退出。
 
 **三条必须知道的事实**：
 
-1. **切换只改文件是假生效**。Claude Code 只在**启动时读一次** settings，跑着的会话不会热加载。`use` 已内建"杀掉会话让它重启"；桥接端自动重启（飞书不掉线），终端端默认只提示、要真杀得加 `--kill-terminals`（调用者自己那个会话**永不被杀**）。
+1. **切换只改文件是假生效**。Claude Code 只在**启动时读一次** settings，跑着的会话不会热加载。`use` 已内建"杀掉会话让它重启"；桥接端自动重启（飞书不掉线）。终端端默认根本不涉及（见上：默认不切全局）；真要切全局时用 `--relaunch-terminals`——它**结束完会把窗口原样开回来**（同命令行、同目录、带 `-c` 续会话）。**别用 `--kill-terminals`**：只杀不开等于把用户撂在没窗口的地方。另注意"调用者自己永不被杀"这条只在命令行成立——托盘/网页起的 webui 不在任何 claude 会话底下，`CLAUDE_PID` 为空，认不出谁是"自己"，所以那条路只能靠"杀完能重开"兜底。
 2. **切换前必探活**。切过去才发现不通 = 整套系统当场瘫痪。`use` 默认先 `check`，不通就拒绝切（确认无误可 `--force`）。
 3. **`providers.json` 含真实 Key，已 gitignore，绝不入库**；入库的是脱敏的 `providers.example.json`。别把 Key 写进任何会提交的文件。
 
