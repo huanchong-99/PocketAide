@@ -748,6 +748,35 @@ test('U9 面板四象限: 四个格子都要放得进去, 不能有两个是摆�
   assert(/#view \.qbin/.test(html), '收口区没绑拖放事件');
 });
 
+test('U9 面板拖拽: 拖着卡片的时候必须还能滚, 不然看不见往哪放', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  // 真出过事: 四象限卡片多的时候, 拖着拖着视图滚到下面, 四个格子全跑出屏幕外,
+  // 手里还捏着卡片、松手就落到不知道哪儿去——用户的原话是"这样我才知道自己往哪放"。
+
+  // 滚的必须是 #view: 桌面端 body 是 overflow:hidden, 整页根本不滚,
+  // 对着 window/scrollingElement 使劲是一点反应都没有的。
+  const sc = /function dsScroller[\s\S]*?\n\}/.exec(html);
+  assert(sc && /\$\('view'\)/.test(sc[0]), '拖拽滚动没认准 #view 这个真滚动容器');
+
+  // 两条路都得留: 浏览器原生拖拽循环期间 wheel 基本不派发, 只押滚轮等于没做
+  assert(/document\.addEventListener\('wheel', dsWheel/.test(html), '拖拽期间没接滚轮');
+  assert(/function dsTick[\s\S]*?scrollTop \+=/.test(html), '缺边缘自动滚兜底, 收不到滚轮就彻底没救');
+  const tick = /function dsTick[\s\S]*?\n\}/.exec(html);
+  assert(tick && /r\.top/.test(tick[0]) && /r\.bottom/.test(tick[0]),
+    '边缘自动滚只顾一头, 只能往下滚回不去上面');
+
+  // 必须绑在 document 上: 卡片每次 render 都重建, 绑到卡片上必漏
+  for (const ev of ['dragstart', 'dragend', 'drop']) {
+    assert(new RegExp("document\\.addEventListener\\('" + ev + "', ds").test(html),
+      '拖拽滚动没在 document 上接 ' + ev + ', 生命周期会漏');
+  }
+  // 拖到浏览器外面等情况下 dragend 可能不来, 不能让 wheel 被永久劫持
+  assert(/DS\.until/.test(html) && /Date\.now\(\) > DS\.until/.test(html),
+    '没有保险丝: dragend 万一不来, 滚轮就被这段代码永久接管了');
+  // 提示不能挡落点判定
+  assert(/\.dragtip\{[^}]*pointer-events:none/.test(html), '拖拽提示会挡住落点');
+});
+
 test('U9 面板看板: 已完成/已取消要能一键归档, 别一直占着看板', () => {
   const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
   assert(/const ARCHIVABLE = \['done', 'cancelled'\]/.test(html), '缺可归档状态白名单');

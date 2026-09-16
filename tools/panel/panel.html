@@ -204,6 +204,13 @@
   .toast.bad{background:#8f2f4c;border-color:#8f2f4c;color:#fff}
   .ro .card,.ro tbody tr{cursor:default}
 
+  /* 拖拽时才出现的提示。pointer-events:none —— 它绝不能挡住落点判定。 */
+  .dragtip{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:70;
+           pointer-events:none;background:var(--slate-dark);color:var(--ivory-light);
+           border-radius:999px;padding:6px 14px;font-size:12px;opacity:.9;
+           box-shadow:0 6px 18px #14141426}
+  .dragtip[hidden]{display:none}
+
   /* 快捷键速查（按 ?）。不做成弹窗浮层：它不该挡住你正在看的看板。 */
   .keys{position:fixed;right:20px;bottom:20px;z-index:60;display:none;
         background:var(--card);border:1px solid var(--line2);border-radius:11px;
@@ -368,6 +375,7 @@
 
 <div class="toast" id="toast"></div>
 <div class="keys" id="keys"></div>
+<div class="dragtip" id="dragtip" hidden>滚轮可以滚 · 或把指针移到上/下边缘自动滚</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -1010,6 +1018,86 @@ $('view').addEventListener('click', async (e) => {
   const m = MAP[a.dataset.hact];
   if (m) await patch(name, bucket, m[0], m[1]);
 });
+
+// ---------------------------------------------------------------- 拖拽时能滚动
+
+/**
+ * 拖着卡片的时候把视图滚起来。
+ *
+ * 【为什么光监听滚轮不够】原生 HTML5 拖拽期间浏览器进入自己的拖拽循环，`wheel` 事件
+ * 基本不会再派发给页面。这正是各家看板库一律实现"拖到边缘自动滚"的原因，不是偷懒。
+ * 所以两条路都接上：**真能收到滚轮就照滚**（那是用户最直接想要的），收不到就靠
+ * **边缘自动滚**兜底——把指针挪到视图上边缘，它自己往上滚，效果一样是"能滚回去看清再放"。
+ *
+ * 【滚的是 #view 不是窗口】桌面端 body 是 overflow:hidden（应用外壳布局），整页根本不滚；
+ * 真正的滚动容器是 #view。对着 window.scrollBy 使劲是一点反应都没有的。
+ */
+const DS = { on: false, y: null, raf: 0, el: null, until: 0 };
+const DS_HOT = 110;      // 离容器上/下边缘这么近就开始自动滚
+const DS_MAX = 26;       // 每帧最多滚这么多像素，越靠边越快
+
+function dsScroller() {
+  const v = $('view');
+  return v && v.scrollHeight > v.clientHeight ? v : document.scrollingElement;
+}
+
+function dsStart() {
+  if (DS.on) return;
+  DS.on = true;
+  DS.el = dsScroller();
+  DS.y = null;
+  // 保险丝：拖到浏览器外面等情况下 dragend 可能不来，不能让 wheel 被永久劫持
+  DS.until = Date.now() + 60000;
+  document.addEventListener('dragover', dsMove, true);
+  document.addEventListener('wheel', dsWheel, { passive: false, capture: true });
+  DS.raf = requestAnimationFrame(dsTick);
+  // 内容没超出一屏就没得滚，别弹个没用的提示碍眼
+  const tip = $('dragtip');
+  if (tip) tip.hidden = !(DS.el && DS.el.scrollHeight > DS.el.clientHeight + 4);
+}
+
+function dsStop() {
+  if (!DS.on) return;
+  DS.on = false;
+  cancelAnimationFrame(DS.raf);
+  document.removeEventListener('dragover', dsMove, true);
+  document.removeEventListener('wheel', dsWheel, { capture: true });
+  DS.el = null; DS.y = null;
+  const tip = $('dragtip');
+  if (tip) tip.hidden = true;
+}
+
+function dsMove(e) { DS.y = e.clientY; }
+
+/** 拖拽期间真收到滚轮就直接照滚。收得到最好——这是最顺手的那条路。 */
+function dsWheel(e) {
+  if (!DS.on || !DS.el) return;
+  e.preventDefault();
+  DS.el.scrollTop += e.deltaY;
+}
+
+function dsTick() {
+  if (!DS.on) return;
+  if (Date.now() > DS.until) return dsStop();
+  const el = DS.el;
+  if (el && DS.y != null) {
+    // 容器的可视上下边：#view 用它自己的矩形，整页滚时就是视口
+    const r = el === document.scrollingElement
+      ? { top: 0, bottom: window.innerHeight }
+      : el.getBoundingClientRect();
+    const up = DS.y - r.top, down = r.bottom - DS.y;
+    let d = 0;
+    if (up < DS_HOT) d = -Math.ceil(DS_MAX * (1 - Math.max(up, 0) / DS_HOT));
+    else if (down < DS_HOT) d = Math.ceil(DS_MAX * (1 - Math.max(down, 0) / DS_HOT));
+    if (d) el.scrollTop += d;
+  }
+  DS.raf = requestAnimationFrame(dsTick);
+}
+
+// 绑 document、只绑一次：卡片每次 render 都重建，绑到卡片上必漏。
+document.addEventListener('dragstart', dsStart, true);
+document.addEventListener('dragend', dsStop, true);
+document.addEventListener('drop', dsStop, true);
 
 /** 看板拖拽：拖到另一列 = 改状态。 */
 function wireDragBoard() {
