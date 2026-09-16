@@ -74,7 +74,7 @@ function cleanup() {
   CREATED.clear();
   let removed = 0;
   for (const rel of news) if (rmOne(rel)) removed++;
-  for (const t of H.schedTasks('AICanmou-Remind-')) if (!reminderBaseline.has(t)) unregister(t);
+  for (const t of H.schedTasks('PocketAide-Remind-')) if (!reminderBaseline.has(t)) unregister(t);
   if (removed) {
     // 持久化删除保持仓库干净, 再把 kg 索引同步回当前(删掉测试节点)。
     try { execFileSync('git', ['-C', H.REPO, 'add', '-A'], { encoding: 'utf8' }); } catch (_) {}
@@ -90,8 +90,8 @@ async function main() {
   if (fs.existsSync(path.join(H.REPO, 'bridge', '.bridge.lock'))) {
     console.log('⚠ 检测到桥接在线(.bridge.lock)：测试与桥接共用工作树。请确保测试期间无飞书消息进来，否则差分可能混入桥接产物。');
   }
-  for (const t of H.schedTasks('AICanmou-Remind-zztest')) unregister(t);
-  reminderBaseline = new Set(H.schedTasks('AICanmou-Remind-'));
+  for (const t of H.schedTasks('PocketAide-Remind-zztest')) unregister(t);
+  reminderBaseline = new Set(H.schedTasks('PocketAide-Remind-'));
   baseKnowledge = snap(['knowledge']);
   baseTasksActive = snap(['tasks/active']);
   baseWorkspace = snap(['workspace']);
@@ -244,11 +244,11 @@ async function main() {
     });
 
     if (pick('3e')) await r.test('3e 定时提醒(创建计划任务)', async () => {
-      const before = H.schedTasks('AICanmou-Remind-').length;
+      const before = H.schedTasks('PocketAide-Remind-').length;
       const reply = await s.say('30分钟后提醒我检查测试结果。');
       H.assert(reply.length > 0, '应确认设定提醒');
-      const tasks = await H.waitFor(() => H.schedTasks('AICanmou-Remind-'), (a) => a.length >= before + 1, 15000);
-      H.assert(tasks.length >= before + 1, '应新建一个 AICanmou-Remind-* 计划任务, 现有: ' + tasks.join(','));
+      const tasks = await H.waitFor(() => H.schedTasks('PocketAide-Remind-'), (a) => a.length >= before + 1, 15000);
+      H.assert(tasks.length >= before + 1, '应新建一个 PocketAide-Remind-* 计划任务, 现有: ' + tasks.join(','));
       // 该提醒由 cleanup() 据基线移除, 不会真的到点发飞书。
     });
 

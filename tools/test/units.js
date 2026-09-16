@@ -1005,6 +1005,50 @@ test('U9 离线: SW 缓存只读快照, 写操作绝不排队重放', () => {
   assert(/S\.offline/.test(html) && /只读|改不了/.test(html), '页面没有根据 offline 标记转只读');
 });
 
+test('U10 脱敏: 开源镜像里不许出现私有项目的身份信息', () => {
+  // 这套代码有两份: 私有的原仓库, 和对外开源的脱敏镜像。两边绝大多数文件逐字相同,
+  // 但有几十处是"故意不同"的脱敏分叉点(项目名、计划任务前缀、示例配置…)。
+  // 同步时漏掉其中一处, 私有项目的身份就随下一次 push 进了公开仓库——**真出过两次**:
+  //   · manifest.webmanifest 的 description 带着原项目名被推了出去
+  //   · scenarios.js 的计划任务前缀没换, 既泄露代号、又让测试永远找不到任务
+  // 靠人每次同步时记得替换是不现实的, 所以让测试盯着。
+  //
+  // 只在脱敏镜像里跑: 私有仓库里这些名字是合法的——它本来就叫这个。
+  // 判据用 LICENSE + README.zh-CN.md, 这两个文件只有对外那份才有。
+  const isMirror = fs.existsSync(path.join(REPO, 'LICENSE')) &&
+                   fs.existsSync(path.join(REPO, 'README.zh-CN.md'));
+  if (!isMirror) return;
+
+  // 敏感词用拼接写, 别写成完整字面量: 否则本文件自己就成了命中项,
+  // 就只能把自己排除在扫描外——那等于在检查器上开了个洞。现在它自己也在被查。
+  const FORBIDDEN = [
+    [new RegExp('个人' + 'AI参谋' + '系统'), '私有项目中文名'],
+    [new RegExp('AICan' + 'mou'), '私有项目内部代号'],
+    [/C:[\\/]+Users[\\/]+Administrator/i, '开发机用户目录'],
+    [/F:[\\/]*[一-龥]/, '开发机中文绝对路径'],
+    [/[A-Za-z0-9._%+-]+@(gmail|qq|163|126|outlook|hotmail|foxmail)\./i, '真实邮箱'],
+    [/\bsk-(?!fake|should)[A-Za-z0-9_-]{20,}/, '疑似真实 API Key'],
+    [/\bcli_[a-z0-9]{16,}/, '疑似真实飞书 App ID'],
+    [/\bgh[pousr]_[A-Za-z0-9]{30,}/, '疑似真实 GitHub token'],
+  ];
+
+  let list;
+  try {
+    list = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).trim().split('\n');
+  } catch (_) { return; }        // 不是 git 仓库(比如打包下载的)就不查
+
+  const bad = [];
+  for (const rel of list) {
+    let s;
+    try { s = fs.readFileSync(path.join(REPO, rel), 'utf8'); } catch (_) { continue; }
+    for (const [re, what] of FORBIDDEN) {
+      const m = re.exec(s);
+      if (m) bad.push(rel + ' → ' + what + '(' + m[0].slice(0, 12) + '…)');
+    }
+  }
+  assert(bad.length === 0, '开源镜像里混进了私有信息:\n    ' + bad.join('\n    '));
+});
+
 // ---- 收尾 ----
 rmrfDir(TMP);
 
