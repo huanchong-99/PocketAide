@@ -283,11 +283,26 @@ test('U8 webui 安全契约: 无 token 403 / Key 不出明文 / 只绑本地', (
         const j = await ok.json();
         if (!j.ok || !Array.isArray(j.data.providers)) return done('FAIL state 结构不对', 1);
         const raw = JSON.stringify(j.data);
-        if (/"ANTHROPIC_AUTH_TOKEN"/.test(raw)) return done('FAIL 响应里出现了原始 env Key 字段', 1);
+        // 这条原来写成"响应里不许出现 ANTHROPIC_AUTH_TOKEN 这个串"——错的。status 里有个
+        // anthropicKeys 字段，装的正是**键名**列表（用来查"声称官方直连却残留 ANTHROPIC_*"），
+        // 所以只要当前供应商是第三方，这条必然误报：它把键名当成了 Key 本身。
+        // 真正要守的是 **Key 的值** 一个字节都不许出现。值只在本进程内存里比对，不落盘。
+        const secrets = [];
+        try {
+          const store = require(path.join(REPO, 'tools', 'switch', 'switch.js')).loadStore();
+          for (const pr of Object.values(store.providers || {})) {
+            for (const [k, v] of Object.entries(pr.env || {})) {
+              if (/TOKEN|API_KEY/i.test(k) && v && String(v).length > 8) secrets.push(String(v));
+            }
+          }
+        } catch (_) {}
+        for (const sct of secrets) {
+          if (raw.includes(sct)) return done('FAIL 响应里出现了 Key 明文', 1);
+        }
         for (const pr of j.data.providers) {
           if (pr.hasToken && !/\\*\\*\\*/.test(pr.tokenMasked)) return done('FAIL Key 未打码: ' + pr.name, 1);
         }
-        done('PASS ' + j.data.providers.length + ' 档, 端口 ' + info.port, 0);
+        done('PASS ' + j.data.providers.length + ' 档, 比对了 ' + secrets.length + ' 个真实 Key, 端口 ' + info.port, 0);
       } catch (e) { done('FAIL 请求异常: ' + e.message, 1); }
     });
     p.on('error', (e) => done('FAIL 无法启动: ' + e.message, 1));
@@ -486,6 +501,39 @@ test('U8 切换: 两端各用各的是正常的, 只有没人承认的不一致�
   // 桥接下次启动会被"同步"成用户根本没给它选的那家。
   assert(/store\.scopes && store\.scopes\.bridge\) \|\| store\.current/.test(js),
     'syncBridge 还在直接认 current, 只切全局也会把桥接带跑');
+});
+
+test('U8 切换: "正在重启"不许说成"没重启", 但真没重启照样要报', () => {
+  // 真出过事：切换页同一屏里，日志写「桥接正在自动拉起新会话（新配置将在此刻生效）」，
+  // 上方红字却写「该端尚未重启，配置还没生效」。根因是杀完会话到新会话起来的那几秒，
+  // 该端会话数=0，而 0 个被当成了"拿不到 => 保守算没重启"。可 0 个恰恰意味着
+  // **没有任何进程还在用旧配置**，说"配置还没生效"是错的。
+  const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
+  assert(typeof sw.classifyLive === 'function', 'classifyLive 没导出, 四态判定没法逐个钉');
+
+  const base = { configuredModel: 'glm-5.3', live: { model: 'claude-opus-5', atMs: 1000 } };
+  const cases = [
+    ['配置和实跑一致', { configuredModel: 'glm-5.3', live: { model: 'glm-5.3', atMs: 1000 }, scanned: true, sessionCount: 1 }, 'ok'],
+    ['有会话且比记录新 => 已重启', { ...base, sessionStartedAt: 2000, scanned: true, sessionCount: 1 }, 'restarted'],
+    ['一个会话都没有 => 正在重启, 不是故障', { ...base, sessionStartedAt: null, scanned: true, sessionCount: 0 }, 'restarting'],
+    ['有会话但比记录还老 => 真没重启', { ...base, sessionStartedAt: 500, scanned: true, sessionCount: 1 }, 'stale'],
+    ['扫不到进程 => 保守算没重启', { ...base, sessionStartedAt: null, scanned: false, sessionCount: null }, 'stale'],
+  ];
+  for (const [name, input, want] of cases) {
+    const got = sw.classifyLive(input);
+    assert(got === want, `${name}: 期望 ${want}, 实际 ${got}`);
+  }
+
+  // 只有 stale 才配进 warnings；restarting 进 notes。两者串了就是假警报 / 漏报。
+  const js = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'switch.js'), 'utf8');
+  assert(/liveState === 'stale'\) \{\s*\n\s*warnings\.push/.test(js), '不是 stale 也在报警, 会把"正在重启"说成故障');
+  assert(/liveState === 'restarting'\) \{\s*\n\s*notes\.push/.test(js), 'restarting 没走 notes');
+
+  // 页面那句话不许承诺还没发生的事——它正是和体检那句对撞的另一半
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.html'), 'utf8');
+  // 只盯用户真看到的那句(带全角括号)，别把解释"为什么不这么写"的注释也一起判死
+  assert(!/（新配置将在此刻生效）/.test(html), '日志还在写"将在此刻生效", 那一刻新会话根本还没起来');
+  assert(/watchRestart/.test(html), '切换完没有盯着重启落地, 页面会停在"旧的没了新的没起来"那一帧');
 });
 
 // ===== U9 任务面板：数据层无损 + 写入语义 + 双端联动 =====

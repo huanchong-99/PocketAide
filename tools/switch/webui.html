@@ -151,7 +151,11 @@ function renderScopes(s) {
     // 别在这儿自己比字符串：opus[1m] 与 claude-opus-5 是同一个模型的两种写法，裸比必误报橙。
     // liveState 由服务端 buildStatus 算好（含别名归一 + 重启时刻判定），前端只负责显示。
     const live = x.live ? esc(x.live.model) : '(无会话记录)';
-    const note = x.liveState === 'restarted' ? '<div class="sub">已按新配置重启，下次对话即生效</div>' : '';
+    // restarting 不是故障：该端一个会话都没有，没有任何进程还在用旧配置。
+    // 把它涂成橙色警告，就会和切换日志里"桥接正在拉起新会话"当场矛盾。
+    const note = x.liveState === 'restarted' ? '<div class="sub">已按新配置重启，下次对话即生效</div>'
+      : x.liveState === 'restarting' ? '<div class="sub">这是上个会话留下的记录；该端现在没有会话在跑，起来就是新配置</div>'
+      : '';
     return `<div class="card scope">
       <h3>${esc(x.label)} ${x.provider ? `<span class="pill on">${esc(x.provider)}</span>` : '<span class="pill">未识别</span>'}</h3>
       <dl class="kv">
@@ -250,7 +254,9 @@ async function doUse(name, scope) {
   const rs = r.restart || {};
   if (rs.bridge) {
     if (rs.bridge.ok === false) logLine(`③ 桥接：未重启 — ${esc(rs.bridge.reason)}`, 'step-warn');
-    else if ((rs.bridge.killed || []).length) logLine(`③ 桥接：已结束会话 ${rs.bridge.killed.join(', ')}，桥接正在自动拉起新会话（新配置将在此刻生效）`, 'step-ok');
+    // 别写"新配置将在此刻生效"：这行打出来的时候新会话还没起来。它和体检那边如实说的
+    // "该端现在没有会话在跑"凑一屏，就成了一句承诺跟一句否认互相打脸。只说已经发生的事。
+    else if ((rs.bridge.killed || []).length) logLine(`③ 桥接：已结束会话 ${rs.bridge.killed.join(', ')}，桥接正在自动拉起新会话（十几秒后起来，届时就是新配置）`, 'step-ok');
     else logLine(`③ 桥接：${esc(rs.bridge.note || '无需重启')}`, 'step-dim');
   }
   if (rs.terminal) logTerminal(rs.terminal);
@@ -270,6 +276,37 @@ async function doUse(name, scope) {
     d.appendChild(b);
   }
   await refresh();
+  // 刚杀完会话，这一刷正好落在"旧的没了、新的还没起来"那几秒上。不盯着它，页面就会一直
+  // 停在那个半截状态，让人以为切换卡住了。等桥接把新会话拉起来再刷一次，自己收敛。
+  if ((rs.bridge && (rs.bridge.killed || []).length) || (rs.terminal && (rs.terminal.killed || []).length)) {
+    watchRestart();
+  }
+}
+
+/** 盯着重启落地：每 4 秒复查一次，一旦该端有会话跑起来就收工。最多盯 1 分钟。 */
+let watchTimer = null;
+function watchRestart() {
+  clearInterval(watchTimer);
+  const line = logLine('<span class="spin">◐</span> 正在等新会话起来 …', 'step-dim');
+  let n = 0;
+  watchTimer = setInterval(async () => {
+    n++;
+    try {
+      await refresh();
+      const settled = (state.status.scopes || []).every((x) => x.liveState !== 'restarting');
+      if (settled) {
+        clearInterval(watchTimer);
+        line.className = 'step-ok';
+        line.innerHTML = '✓ 新会话已起来，新配置已经在跑了';
+        return;
+      }
+    } catch (_) {}
+    if (n >= 15) {
+      clearInterval(watchTimer);
+      line.className = 'step-warn';
+      line.innerHTML = '新会话 1 分钟还没起来，去托盘看看桥接是不是挂了';
+    }
+  }, 4000);
 }
 
 /** 终端端的处理结果。重点是把"重开了没有、开在哪"说清楚，别再只丢一句"需自行重开窗口"。 */
