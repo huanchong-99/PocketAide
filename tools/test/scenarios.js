@@ -28,7 +28,7 @@ function snap(dirs) { const s = new Set(); for (const d of dirs) for (const f of
 function newSince(before, dirs) { const out = []; for (const d of dirs) for (const f of H.findFiles(d, '')) if (!before.has(f)) out.push(f); return out; }
 function safeRead(f) { try { return H.readFile(f); } catch (_) { return ''; } }
 function unregister(t) { try { execFileSync('powershell', ['-NoProfile', '-Command', `Unregister-ScheduledTask -TaskName '${t}' -Confirm:$false`], { encoding: 'utf8' }); } catch (_) {} }
-function chromeUp() { try { return execFileSync('curl', ['-s', '-m', '2', 'http://127.0.0.1:9222/json/version'], { encoding: 'utf8' }).includes('webSocketDebuggerUrl'); } catch (_) { return false; } }
+function chromeUp() { try { return execFileSync('curl', ['-s', '-m', '2', 'http://127.0.0.1:19222/json/version'], { encoding: 'utf8' }).includes('webSocketDebuggerUrl'); } catch (_) { return false; } }
 
 // 写一篇确定性知识 fixture 并增量索引，纳入清理。供查询类测试自包含。
 function seedKnowledge(rel, content) {
@@ -74,7 +74,7 @@ function cleanup() {
   CREATED.clear();
   let removed = 0;
   for (const rel of news) if (rmOne(rel)) removed++;
-  for (const t of H.schedTasks('PocketAide-Remind-')) if (!reminderBaseline.has(t)) unregister(t);
+  for (const t of H.schedTasks('AICanmou-Remind-')) if (!reminderBaseline.has(t)) unregister(t);
   if (removed) {
     // 持久化删除保持仓库干净, 再把 kg 索引同步回当前(删掉测试节点)。
     try { execFileSync('git', ['-C', H.REPO, 'add', '-A'], { encoding: 'utf8' }); } catch (_) {}
@@ -90,8 +90,8 @@ async function main() {
   if (fs.existsSync(path.join(H.REPO, 'bridge', '.bridge.lock'))) {
     console.log('⚠ 检测到桥接在线(.bridge.lock)：测试与桥接共用工作树。请确保测试期间无飞书消息进来，否则差分可能混入桥接产物。');
   }
-  for (const t of H.schedTasks('PocketAide-Remind-zztest')) unregister(t);
-  reminderBaseline = new Set(H.schedTasks('PocketAide-Remind-'));
+  for (const t of H.schedTasks('AICanmou-Remind-zztest')) unregister(t);
+  reminderBaseline = new Set(H.schedTasks('AICanmou-Remind-'));
   baseKnowledge = snap(['knowledge']);
   baseTasksActive = snap(['tasks/active']);
   baseWorkspace = snap(['workspace']);
@@ -125,7 +125,7 @@ async function main() {
         try { execFileSync('wscript', [path.join(H.REPO, 'scripts', 'launch-scrape-chrome.vbs')], { encoding: 'utf8' }); } catch (_) {}
         await H.waitFor(() => chromeUp(), (v) => v === true, 15000, 1000);
       }
-      if (!chromeUp()) H.skip('调试 Chrome 未就绪(9222)且无法拉起，跳过网页采集端到端(环境问题, 非功能缺陷)');
+      if (!chromeUp()) H.skip('调试 Chrome 未就绪(19222)且无法拉起，跳过网页采集端到端(环境问题, 非功能缺陷)');
       let reply = '';
       try { reply = await s.say('帮我打开 http://example.com 这个网页，把页面正文读出来给我看看。'); }
       finally { try { execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(H.REPO, 'scripts', 'close-scrape-chrome.ps1')], { encoding: 'utf8' }); } catch (_) {} }
@@ -138,22 +138,35 @@ async function main() {
     if (pick('1d')) await r.test('1d 批量摄入(先确认范围→入库→汇报)', async () => {
       const batchDir = path.join(H.REPO, 'workspace', 'tmp', 'batch-test');
       fs.mkdirSync(batchDir, { recursive: true });
-      fs.writeFileSync(path.join(batchDir, 'note1.md'), '# Rust 所有权\nRust 用所有权+借用检查在编译期保证内存安全，无需 GC。\n', 'utf8');
-      fs.writeFileSync(path.join(batchDir, 'note2.md'), '# HTTP 缓存\nCache-Control 与 ETag 决定浏览器与 CDN 的缓存与再验证策略。\n', 'utf8');
-      fs.writeFileSync(path.join(batchDir, 'note3.md'), '# 向量检索\n用 embedding 把文本映射到向量空间，近邻搜索实现语义检索。\n', 'utf8');
+      // 三个主题**故意选在本库射程之外**(生活常识, 不是 AI/安全/开发)。
+      // 原来用的是 Rust 所有权 / HTTP 缓存 / 向量检索, 结果某次跑到一半被杀、cleanup 没执行,
+      // 这三篇留在了 knowledge/ 里。之后每轮 claude 查重都命中残留、正确地"并入而非另建",
+      // 这条用例就永远过不了 —— 而且它每轮还会往那三篇的溯源行里塞一个批次号, 越攒越脏。
+      // 试过给内容加唯一批次号, 没用: 查重是按主题/语义, 不是按字面。只能换主题。
+      const batchTag = 'BATCH' + Date.now().toString(36).toUpperCase();
+      fs.writeFileSync(path.join(batchDir, 'note1.md'), `# 意式浓缩的粉水比（批次 ${batchTag}）\n意式浓缩常用 1:2 粉水比，20 克粉出 40 克液，萃取时间 25-30 秒。本批次编号 ${batchTag}。\n`, 'utf8');
+      fs.writeFileSync(path.join(batchDir, 'note2.md'), `# 羽毛球高远球发力（批次 ${batchTag}）\n高远球靠蹬地转体带动大臂，最后手腕闪动收力，不是单靠手臂抡。本批次编号 ${batchTag}。\n`, 'utf8');
+      fs.writeFileSync(path.join(batchDir, 'note3.md'), `# 漏电保护器动作电流（批次 ${batchTag}）\n家用漏电保护器额定动作电流一般 30mA，动作时间不超过 0.1 秒。本批次编号 ${batchTag}。\n`, 'utf8');
       const before = snap(['knowledge']);
       const reply1 = await s.say('我在 workspace/tmp/batch-test/ 放了一批笔记(3篇)，帮我批量导入知识库。');
       H.assert(/3|三|批量|范围|扫描|篇|条/.test(reply1), '批量摄入应先确认范围(数量/主题): ' + reply1.slice(0, 160));
       const reply2 = await s.say('范围没问题，导入吧。');
       const added = await H.waitFor(() => newSince(before, ['knowledge']), (a) => a.length >= 2, 30000);
       added.forEach((f) => CREATED.add(f));
-      H.assert(added.length >= 2, '批量导入后 knowledge/ 应新增多篇(>=2)，实得 ' + added.length);
+      H.assert(added.length >= 2,
+        '批量导入后 knowledge/ 应新增多篇(>=2)，实得 ' + added.length +
+        '。若回复说"与已有笔记重复、已并入"，是 knowledge/ 里残留了同主题笔记(查重命中), 先清残留: ' + reply2.slice(0, 200));
       H.assert(/\d|完成|导入|篇|条|主题/.test(reply2), '完成后应汇报处理情况: ' + reply2.slice(0, 160));
       // 批量写入后 kg 索引也应更新(与 1a 对齐, 防"多篇写入漏索引")。
+      // 按主题搜而不是按批次号搜：批次号是测试脚手架, claude 整理成知识笔记时会(正确地)把它
+      // 丢掉, 不会写进 knowledge/ —— 拿它当检索锚点必然搜不到。主题本身已足够独特
+      // (库里是 AI/安全/开发, 不会有咖啡萃取), 命中即证明是本轮这篇。
+      const hitBatch = (a) => Array.isArray(a) &&
+        a.some((h) => /浓缩|粉水比|萃取/.test((h.title || '') + (h.snippet || '')));
       const batchHit = await H.waitFor(
-        () => { try { return H.kg(['search', 'Rust 所有权 借用 内存安全', '--k', '5']); } catch (_) { return []; } },
-        (a) => Array.isArray(a) && a.some((h) => /Rust|所有权|借用/.test((h.title || '') + (h.snippet || ''))), 20000);
-      H.assert(Array.isArray(batchHit) && batchHit.some((h) => /Rust|所有权|借用/.test((h.title || '') + (h.snippet || ''))), '批量写入后 kg 应能检索到其中主题(索引已更新)');
+        () => { try { return H.kg(['search', '意式浓缩 粉水比 萃取时间', '--k', '5']); } catch (_) { return []; } },
+        hitBatch, 20000);
+      H.assert(hitBatch(batchHit), '批量写入后 kg 应能检索到本轮写入的主题(索引已更新)');
       rmrfDir(batchDir);
     });
 
@@ -189,21 +202,21 @@ async function main() {
     // ===== 场景三 任务追踪 =====
     if (pick('3a')) await r.test('3a 任务登记', async () => {
       const before = snap(['tasks/active']);
-      const reply = await s.say('我现在开始做一个任务：ProjectX 质量门模块测试。');
+      const reply = await s.say('我现在开始做一个任务：SoloDawn 质量门模块测试。');
       H.assert(reply.length > 0, '应确认登记');
-      const added = await H.waitFor(() => newSince(before, ['tasks/active']).filter((f) => safeRead(f).includes('ProjectX')), (a) => a.length >= 1, 15000);
+      const added = await H.waitFor(() => newSince(before, ['tasks/active']).filter((f) => safeRead(f).includes('SoloDawn')), (a) => a.length >= 1, 15000);
       added.forEach((f) => CREATED.add(f));
       H.assert(added.length >= 1, 'tasks/active 应出现该任务 md');
       H.assert(/status:\s*running/.test(safeRead(added[0])), '新任务状态应为 running');
     });
 
     if (pick('3b')) await r.test('3b 进度更新(追加而非覆盖)', async () => {
-      const exist = H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('ProjectX'));
+      const exist = H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('SoloDawn'));
       if (!exist.length) H.skip('需先跑 3a 登记任务(生命周期测试应顺序跑)');
       const lenBefore = safeRead(exist[0]).length;
-      await s.say('ProjectX 那个任务跑到第三步了，调了个参数，下一步打算跑压力测试。');
+      await s.say('SoloDawn 那个任务跑到第三步了，调了个参数，下一步打算跑压力测试。');
       const file = await H.waitFor(
-        () => H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('ProjectX')),
+        () => H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('SoloDawn')),
         (a) => a.length >= 1 && (safeRead(a[0]).includes('第三步') || safeRead(a[0]).includes('压力测试')), 15000);
       H.assert(file.length >= 1, '任务文件应存在');
       const body = safeRead(file[0]);
@@ -212,30 +225,30 @@ async function main() {
     });
 
     if (pick('3c')) await r.test('3c 状态查询', async () => {
-      const exist = H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('ProjectX'));
+      const exist = H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('SoloDawn'));
       if (!exist.length) H.skip('需先跑 3a 登记任务');
-      const reply = await s.say('ProjectX 那个任务做到哪了？');
+      const reply = await s.say('SoloDawn 那个任务做到哪了？');
       // 必须返回真实进度内容(压力测试/第三步, 来自 3b), 而非仅复述任务名——后者凭记忆也能答, 证明不了读了任务文件。
       H.assert(reply.includes('压力测试') || reply.includes('第三步'), '应返回当前进度内容(压力测试/第三步), 而非仅复述任务名: ' + reply.slice(0, 140));
     });
 
     if (pick('3d')) await r.test('3d 任务完成(done + completed 时间戳)', async () => {
-      const exist = H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('ProjectX'));
+      const exist = H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('SoloDawn'));
       if (!exist.length) H.skip('需先跑 3a 登记任务');
-      await s.say('ProjectX 那个测试做完了。');
+      await s.say('SoloDawn 那个测试做完了。');
       const file = await H.waitFor(
-        () => H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('ProjectX')),
+        () => H.findFiles('tasks/active', '').filter((f) => safeRead(f).includes('SoloDawn')),
         (a) => a.length >= 1 && /status:\s*done/.test(safeRead(a[0])), 15000);
       H.assert(file.length >= 1 && /status:\s*done/.test(safeRead(file[0])), '状态应变 done');
       H.assert(/completed:\s*\d{4}-\d{2}-\d{2}/.test(safeRead(file[0])), '完成应写 completed 时间戳(归档脚本据此判断): ' + safeRead(file[0]).slice(0, 220));
     });
 
     if (pick('3e')) await r.test('3e 定时提醒(创建计划任务)', async () => {
-      const before = H.schedTasks('PocketAide-Remind-').length;
+      const before = H.schedTasks('AICanmou-Remind-').length;
       const reply = await s.say('30分钟后提醒我检查测试结果。');
       H.assert(reply.length > 0, '应确认设定提醒');
-      const tasks = await H.waitFor(() => H.schedTasks('PocketAide-Remind-'), (a) => a.length >= before + 1, 15000);
-      H.assert(tasks.length >= before + 1, '应新建一个 PocketAide-Remind-* 计划任务, 现有: ' + tasks.join(','));
+      const tasks = await H.waitFor(() => H.schedTasks('AICanmou-Remind-'), (a) => a.length >= before + 1, 15000);
+      H.assert(tasks.length >= before + 1, '应新建一个 AICanmou-Remind-* 计划任务, 现有: ' + tasks.join(','));
       // 该提醒由 cleanup() 据基线移除, 不会真的到点发飞书。
     });
 
