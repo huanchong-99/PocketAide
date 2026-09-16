@@ -366,6 +366,39 @@ test('U8 webui 与 CLI 同源: 页面写操作复用 switch.js 的 CMDS', () => 
   assert(/sw\.CMDS\.use\(/.test(webui), 'webui 的切换必须调 CMDS.use，否则会绕过"探活→落盘→重启"三步');
 });
 
+test('U8 webui 不许在人填表的时候自己退掉', () => {
+  const js = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.js'), 'utf8');
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'webui.html'), 'utf8');
+
+  // 真出过事：闲置 45 秒就自杀。配第三方供应商要去别处复制 Base URL 和 API Key，
+  // 表单摊几分钟很正常；机器睡一下心跳就断了，服务没了而页面看着好好的，
+  // 一点保存就是「✗ Failed to fetch」，填的东西白填。
+  const idle = /SWITCH_UI_IDLE_MS \|\| (\d+)/.exec(js);
+  assert(idle, '找不到 IDLE_MS 默认值');
+  assert(Number(idle[1]) >= 120000, `闲置自杀阈值只有 ${idle[1]}ms，填个表就能超时把自己杀掉`);
+
+  // 有未保存内容时必须宽限，且宽限有上限(否则就成了常驻的取密钥服务)
+  assert(/editingSince/.test(js), '服务端不知道页面上有没有未保存的表单, 会在填表途中退掉');
+  assert(/EDIT_GRACE_MS/.test(js), '编辑期宽限没有上限, 会变成事实上的常驻服务');
+  assert(/b && b\.editing/.test(js), 'ping 没有接收页面上报的 editing 状态');
+
+  // 页面这边：睡醒/切回来要立刻补跳，不能干等下一个 10 秒
+  assert(/visibilitychange/.test(html), '标签页重新可见时没有补心跳, 从睡眠里醒来最容易踩空');
+  assert(/editing:\s*formDirty\(\)/.test(html), '心跳没带上表单是否有内容');
+
+  // formDirty 查的字段必须和真正会被保存的字段一致 —— 写这条修复时就先写错过一个
+  // (Base URL 的 id 是 f_url, 我写成了 f_baseUrl, 于是"只填了 URL"不算 dirty)。
+  const ids = /const FORM_IDS = \[([\s\S]*?)\]/.exec(html);
+  assert(ids, '找不到 FORM_IDS');
+  const listed = (ids[1].match(/'([^']+)'/g) || []).map((s) => s.slice(1, -1));
+  const payload = /function formPayload\(\)[\s\S]*?\n}/.exec(html);
+  assert(payload, '找不到 formPayload');
+  const used = [...new Set((payload[0].match(/\$\('(f_[A-Za-z_]+)'\)/g) || []).map((s) => s.slice(3, -2)))];
+  for (const f of used) {
+    assert(listed.includes(f), `formPayload 会保存 ${f}，但 FORM_IDS 里没有它——只填这一项时不算"有未保存内容"，服务照样会退掉`);
+  }
+});
+
 // ===== U9 任务面板：数据层无损 + 写入语义 + 双端联动 =====
 // 这组测试守的是同一件事：面板能改任务文件，而任务文件是用户的真资产。
 // 解析→写回只要有一丁点损耗，第一次拖卡片就会静默吃掉他手写的优先级链、引用块、wikilink。

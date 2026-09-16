@@ -109,11 +109,21 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function api(name, body) {
-  const r = await fetch('/api/' + name, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { 'x-switch-token': TOKEN, 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let r;
+  try {
+    r = await fetch('/api/' + name, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'x-switch-token': TOKEN, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    // fetch 连不上 = 后台服务已经退出。浏览器原话是「Failed to fetch」，
+    // 对着一屏填好的配置抛这么一句，等于什么都没说。换成能照做的话。
+    throw new Error('配置页的后台服务已经退出了（这个页面是按需启动、闲置自动关闭的）。\n' +
+      '你填的内容还在本页面上，没有丢：请从托盘「供应商设置…」重新打开一个配置页，' +
+      '把内容复制过去再保存。');
+  }
+  if (r.status === 403) throw new Error('访问令牌失效了（页面被浏览器重新加载过）。请从托盘「供应商设置…」重新打开。');
   const j = await r.json();
   if (!j.ok) throw new Error(j.error || '请求失败');
   return j.data;
@@ -344,7 +354,35 @@ $('btnTest').onclick = () => save(true);
 $('btnReset').onclick = () => fillForm(null);
 
 refresh().catch((e) => { logClear(); logLine('✗ 加载失败：' + esc(e.message), 'step-bad'); });
-setInterval(() => api('ping').catch(() => {}), 10000);   // 心跳；停跳后服务自行退出
+
+// ---- 心跳 ----
+// 停跳后服务自行退出（关掉标签页就没了）。但"人还在填表"的时候绝不能让它退：
+// 之前 45 秒不跳就自杀，机器睡一下、或者浏览器卡一下就够了——表单还好端端填着，
+// 一点保存就是「Failed to fetch」，填的东西白填。所以：
+//   1) 表单一有内容就在心跳里带上 editing，服务端据此宽限
+//   2) 标签页重新可见 / 窗口重新获得焦点 / 你在敲键盘 时立刻补一次心跳，
+//      而不是干等下一个 10 秒——从睡眠里醒过来的那一下最需要它
+// 和 formPayload() 取的是同一组字段（Base URL 的 id 是 f_url，不是 f_baseUrl）
+const FORM_IDS = ['f_name', 'f_label', 'f_url', 'f_token', 'f_model',
+                  'f_opus', 'f_sonnet', 'f_haiku', 'f_reasoning'];
+const formDirty = () => FORM_IDS.some((id) => { const el = $(id); return el && el.value.trim(); });
+
+let beating = false;
+async function beat() {
+  if (beating) return;
+  beating = true;
+  try { await api('ping', { editing: formDirty() }); } catch (_) {} finally { beating = false; }
+}
+setInterval(beat, 10000);
+beat();
+
+// 补跳的时机：醒过来 / 切回这个标签页 / 正在操作
+addEventListener('visibilitychange', () => { if (!document.hidden) beat(); });
+addEventListener('focus', beat);
+let typeT = 0;
+for (const ev of ['input', 'keydown', 'pointerdown']) {
+  addEventListener(ev, () => { clearTimeout(typeT); typeT = setTimeout(beat, 400); }, true);
+}
 </script>
 </body>
 </html>

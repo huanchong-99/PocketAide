@@ -28,8 +28,24 @@ const procs = require('./procs');
 
 const HTML = path.join(__dirname, 'webui.html');
 const TOKEN = crypto.randomBytes(24).toString('hex');
-const IDLE_MS = Number(process.env.SWITCH_UI_IDLE_MS || 45000);   // 无心跳多久后自杀
+
+/**
+ * 无心跳多久后自杀。
+ *
+ * 原来是 45 秒，太短了，真出过事：配第三方供应商要去别处复制 Base URL 和 API Key，
+ * 表单摊在那儿几分钟很正常；这期间只要机器睡一下、或者浏览器/系统卡一下让心跳
+ * 断了 45 秒，服务就自己没了。页面上表单还好端端地填着，一点保存就是
+ * 「✗ Failed to fetch」——fetch 连不上死掉的端口，报错还是浏览器的原文，
+ * 什么有用的信息都没有，填的东西也白填。
+ *
+ * 放宽到 3 分钟。安全性上没有实质变化：它依然是"关掉页面就没了"，
+ * 而不是常驻服务——3 分钟和 45 秒都不构成"长期暴露的取密钥口子"。
+ */
+const IDLE_MS = Number(process.env.SWITCH_UI_IDLE_MS || 180000);
+/** 表单有未保存内容时最多再多活这么久。避免"一直编辑"把它变成事实上的常驻服务。 */
+const EDIT_GRACE_MS = Number(process.env.SWITCH_UI_EDIT_MS || 30 * 60 * 1000);
 let lastBeat = Date.now();
+let editingSince = 0;   // 页面报告表单有未保存内容的起始时刻；0 = 没在编辑
 
 // ---------------------------------------------------------------- 工具
 
@@ -212,7 +228,17 @@ const API = {
     return { ...r, ...providersView() };
   },
 
-  async ping() { lastBeat = Date.now(); return { ok: true }; },
+  /**
+   * 心跳。页面顺带报告表单上有没有未保存内容（editing）。
+   * 正在填表时**绝不**让服务在你眼皮底下退掉——那正是最伤人的时刻：
+   * 辛苦填完的 Key 一点保存就没了。
+   */
+  async ping(b) {
+    lastBeat = Date.now();
+    if (b && b.editing) { if (!editingSince) editingSince = lastBeat; }
+    else editingSince = 0;
+    return { ok: true, editGraceMs: EDIT_GRACE_MS };
+  },
 };
 
 // ---------------------------------------------------------------- 服务
@@ -257,5 +283,11 @@ server.listen(0, '127.0.0.1', () => {
 
 // 关掉页面 = 停止心跳 = 服务自己退出。按需起、用完即走，不留常驻取密钥口子。
 setInterval(() => {
-  if (Date.now() - lastBeat > IDLE_MS) { try { server.close(); } catch (_) {} process.exit(0); }
+  const now = Date.now();
+  if (now - lastBeat <= IDLE_MS) return;                    // 页面还在，继续活着
+  // 心跳断了，但页面上有没保存的表单：再宽限一会儿，别让人填完一点保存就扑空。
+  // 宽限也有上限，否则"一直在编辑"就把它变成常驻服务了。
+  if (editingSince && now - editingSince < EDIT_GRACE_MS) return;
+  try { server.close(); } catch (_) {}
+  process.exit(0);
 }, 5000).unref?.();
