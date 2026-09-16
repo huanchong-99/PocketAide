@@ -726,10 +726,10 @@ test('U9 面板四象限: 四个格子都要放得进去, 不能有两个是摆�
   // 真出过事: 拖进左半边那两格(重要且紧急 / 不重要但紧急)必然弹回右边。
   // 因为 drop 只写 priority, 而"紧急"是 daysLeft<=7 算出来的、拖动压根不碰截止日。
   // 四个格子有两个永远放不进东西, 用户只会以为拖拽坏了。
-  const drop = /box\.addEventListener\('drop'[\s\S]*?\n {4}\}\);/.exec(html);
-  assert(drop, '找不到四象限的 drop 处理');
+  const drop = /function dgDrop[\s\S]*?\n\}/.exec(html);
+  assert(drop, '找不到落点处理 dgDrop');
   assert(/isUrgent\(t\) !== q\.urgent/.test(drop[0]),
-    'drop 没有比较"要放进的格子紧不紧急"和"任务实际紧不紧急", 往左拖必然落到右边');
+    '落点没有比较"要放进的格子紧不紧急"和"任务实际紧不紧急", 往左拖必然落到右边');
   assert(/openQuadDlg\(/.test(drop[0]), '对不上时没有任何补救, 卡片会静默落到别的格子里');
 
   // 补救必须能真的改到截止日——只弹个提示还是放不进去
@@ -745,36 +745,66 @@ test('U9 面板四象限: 四个格子都要放得进去, 不能有两个是摆�
   // 四象限得有地方收口: 任务做完没处放, 只能一直躺在格子里
   assert(/class="qbin"[^>]*data-done="done"/.test(html), '四象限缺「做完了」投放口');
   assert(/data-done="cancelled"/.test(html), '四象限缺「不做了」投放口');
-  assert(/#view \.qbin/.test(html), '收口区没绑拖放事件');
+  assert(/#view \.qbin/.test(html), '收口区没算在落点选择器里');
 });
 
-test('U9 面板拖拽: 拖着卡片的时候必须还能滚, 不然看不见往哪放', () => {
+test('U9 面板拖拽: 拖着卡片时必须还能滚, 所以不许用浏览器原生拖拽', () => {
   const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
-  // 真出过事: 四象限卡片多的时候, 拖着拖着视图滚到下面, 四个格子全跑出屏幕外,
-  // 手里还捏着卡片、松手就落到不知道哪儿去——用户的原话是"这样我才知道自己往哪放"。
+  // 真出过事: 四象限卡片一多, 拖着拖着视图就滚到下面, 四个格子全跑出屏幕外,
+  // 手里还捏着卡片、松手落到哪儿全凭猜。用户要的是"按住不放的同时能滚滚轮滚回去"。
+  //
+  // 关键: 这件事在 HTML5 原生拖拽下**做不到**。原生拖拽一开始, 浏览器就进入它自己的
+  // 模态拖拽循环, 这期间 wheel 事件根本不派发给页面——接都接不到, 谈何滚。
+  // 所以整套拖拽必须走指针事件自己实现。下面每一条都是"一改回去滚轮就又死了"。
 
-  // 滚的必须是 #view: 桌面端 body 是 overflow:hidden, 整页根本不滚,
-  // 对着 window/scrollingElement 使劲是一点反应都没有的。
-  const sc = /function dsScroller[\s\S]*?\n\}/.exec(html);
-  assert(sc && /\$\('view'\)/.test(sc[0]), '拖拽滚动没认准 #view 这个真滚动容器');
-
-  // 两条路都得留: 浏览器原生拖拽循环期间 wheel 基本不派发, 只押滚轮等于没做
-  assert(/document\.addEventListener\('wheel', dsWheel/.test(html), '拖拽期间没接滚轮');
-  assert(/function dsTick[\s\S]*?scrollTop \+=/.test(html), '缺边缘自动滚兜底, 收不到滚轮就彻底没救');
-  const tick = /function dsTick[\s\S]*?\n\}/.exec(html);
-  assert(tick && /r\.top/.test(tick[0]) && /r\.bottom/.test(tick[0]),
-    '边缘自动滚只顾一头, 只能往下滚回不去上面');
-
-  // 必须绑在 document 上: 卡片每次 render 都重建, 绑到卡片上必漏
-  for (const ev of ['dragstart', 'dragend', 'drop']) {
-    assert(new RegExp("document\\.addEventListener\\('" + ev + "', ds").test(html),
-      '拖拽滚动没在 document 上接 ' + ev + ', 生命周期会漏');
+  // ① 卡片绝不能是原生可拖的: 只要 draggable="true", 按住拖就进模态循环
+  assert(/draggable="false"/.test(html), '卡片又变回原生可拖了, 拖拽期间滚轮会再次失效');
+  assert(!/draggable="' \+/.test(html) && !/draggable="true"/.test(html),
+    '卡片的 draggable 不是写死的 false');
+  // ② 一个原生拖拽事件都不许接: 接了就说明还有原生拖拽这条路
+  for (const ev of ['dragstart', 'dragover', 'dragleave']) {
+    assert(!new RegExp("addEventListener\\('" + ev + "'").test(html),
+      '还在监听原生拖拽事件 ' + ev + ', 说明原生拖拽这条路没断干净');
   }
-  // 拖到浏览器外面等情况下 dragend 可能不来, 不能让 wheel 被永久劫持
-  assert(/DS\.until/.test(html) && /Date\.now\(\) > DS\.until/.test(html),
-    '没有保险丝: dragend 万一不来, 滚轮就被这段代码永久接管了');
-  // 提示不能挡落点判定
-  assert(/\.dragtip\{[^}]*pointer-events:none/.test(html), '拖拽提示会挡住落点');
+  assert(!/dataTransfer/.test(html), '还在用 dataTransfer, 那是原生拖拽的搬运方式');
+
+  // ③ 拖拽由指针事件驱动, 且绑在 document 上(卡片每次 render 都重建, 绑卡片上必漏)
+  assert(/document\.addEventListener\('pointerdown', dgDown/.test(html), '没有指针事件的拖拽入口');
+  for (const ev of ['pointermove', 'pointerup', 'pointercancel']) {
+    assert(new RegExp("addEventListener\\('" + ev + "'").test(html), '拖拽缺 ' + ev + ' 处理');
+  }
+  // 页面里不许再出现 wheel 监听: 现在靠的是"页面处于普通状态、滚轮本来就正常",
+  // 一旦有人加个 wheel 监听去 preventDefault, 等于又把滚轮接管走了
+  assert(!/addEventListener\('wheel'/.test(html), '又有人接管滚轮了, 那正是当初坏掉的原因');
+
+  // ④ 影子必须 pointer-events:none, 否则 elementFromPoint 永远只命中影子, 落点判定全废
+  assert(/\.ghost\{[^}]*pointer-events:none/.test(html), '拖拽影子会挡住落点判定');
+
+  // ⑤ 落点每帧重算, 不能只在指针移动时算——滚轮滚过之后指针没动,
+  //    但同一个屏幕坐标底下已经换成别的格子了
+  const tick = /function dgTick[\s\S]*?\n\}/.exec(html);
+  assert(tick, '找不到 dgTick');
+  assert(/dgZoneAt\(/.test(tick[0]), '落点判定没放进每帧循环, 滚动后会落错格子');
+  // 边缘自动滚是第二条路(手不离卡片也能挪视图), 上下两头都得有
+  assert(/r\.top/.test(tick[0]) && /r\.bottom/.test(tick[0]), '边缘自动滚只顾一头, 回不去上面');
+  const sc = /function dgScroller[\s\S]*?\n\}/.exec(html);
+  assert(sc && /\$\('view'\)/.test(sc[0]), '滚的不是 #view——桌面端整页 overflow:hidden, 根本不滚');
+
+  // ⑥ Esc 取消必须真的不落地
+  const key = /function dgKey[\s\S]*?\n\}/.exec(html);
+  assert(key && /DG\.zone = null/.test(key[0]), 'Esc 取消没清掉落点, 会照样写进去');
+
+  // ⑦ 松手后浏览器补的那个 click 必须吞掉, 否则拖完顺手弹出个抽屉
+  assert(/function dgSwallow/.test(html) && /addEventListener\('click', dgSwallow, true\)/.test(html),
+    '拖完没拦住补发的 click, 会莫名其妙打开抽屉');
+
+  // ⑧ 三种落点的行为不能丢(换实现最容易顺手丢掉其中一种)
+  const drop = /function dgDrop[\s\S]*?\n\}/.exec(html);
+  assert(drop, '找不到 dgDrop');
+  assert(/classList\.contains\('col'\)/.test(drop[0]), '看板列不再是落点');
+  assert(/classList\.contains\('qbin'\)/.test(drop[0]), '四象限收口区不再是落点');
+  assert(/isUrgent\(t\) !== q\.urgent/.test(drop[0]) && /openQuadDlg\(/.test(drop[0]),
+    '四象限左半边那两格又变回摆设了(不问截止日, 往左拖必然弹回右边)');
 });
 
 test('U9 面板看板: 已完成/已取消要能一键归档, 别一直占着看板', () => {

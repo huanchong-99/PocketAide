@@ -204,6 +204,15 @@
   .toast.bad{background:#8f2f4c;border-color:#8f2f4c;color:#fff}
   .ro .card,.ro tbody tr{cursor:default}
 
+  /* 自己做的拖拽。浏览器原生拖拽免费给的影子没有了，得自己画一个。
+     pointer-events:none 是硬要求：影子跟在指针底下，一旦能被点中，
+     elementFromPoint 每次都只会命中影子自己，落点判定全废。 */
+  .ghost{position:fixed;z-index:80;margin:0;pointer-events:none;
+         box-shadow:0 14px 34px #14141338;opacity:.96;transform:rotate(1.2deg)}
+  .card.lifted{opacity:.3}
+  body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
+  body.dragging .card,body.dragging .ghost{cursor:grabbing}
+
   /* 拖拽时才出现的提示。pointer-events:none —— 它绝不能挡住落点判定。 */
   .dragtip{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:70;
            pointer-events:none;background:var(--slate-dark);color:var(--ivory-light);
@@ -375,7 +384,7 @@
 
 <div class="toast" id="toast"></div>
 <div class="keys" id="keys"></div>
-<div class="dragtip" id="dragtip" hidden>滚轮可以滚 · 或把指针移到上/下边缘自动滚</div>
+<div class="dragtip" id="dragtip" hidden>按住不放也能滚滚轮 · 移到上/下边缘会自动滚 · Esc 取消</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -516,8 +525,10 @@ function metaLine(t) {
 }
 
 const cardHtml = (t) =>
-  '<div class="card' + (t.priority ? ' p' + t.priority : '') + '" draggable="' + (S.offline ? 'false' : 'true') +
-  '" data-name="' + esc(t.name) + '" data-bucket="' + esc(t.bucket) + '">' +
+  // draggable 必须是 false：只要它是 true，按住拖就会触发浏览器的原生拖拽循环，
+  // 那期间 wheel 收不到——"拖着的同时滚滚轮"就彻底没戏了。拖拽改由指针事件自己做。
+  '<div class="card' + (t.priority ? ' p' + t.priority : '') + '" draggable="false"' +
+  ' data-name="' + esc(t.name) + '" data-bucket="' + esc(t.bucket) + '">' +
     '<div class="t">' + esc(t.title) + '</div>' +
     '<div class="meta">' + metaLine(t) + '</div>' +
     (t.nextFirst ? '<div class="next">→ ' + esc(t.nextFirst) + '</div>' : '') +
@@ -936,7 +947,7 @@ function wire() {
       render();
     });
   });
-  if (!S.offline) { wireDragBoard(); wireDragQuad(); }
+  // 拖拽不在这里绑：它是 document 上的一套指针事件，只绑一次，见下面「拖拽」那节。
 }
 
 // 横幅上的动作键。横幅每次 render 都重建，所以绑在容器上。
@@ -1019,143 +1030,199 @@ $('view').addEventListener('click', async (e) => {
   if (m) await patch(name, bucket, m[0], m[1]);
 });
 
-// ---------------------------------------------------------------- 拖拽时能滚动
+// ---------------------------------------------------------------- 拖拽（自己做，不走浏览器原生）
 
 /**
- * 拖着卡片的时候把视图滚起来。
+ * 卡片拖拽。**不用** HTML5 原生拖拽（draggable + dragstart/drop），自己用指针事件做。
  *
- * 【为什么光监听滚轮不够】原生 HTML5 拖拽期间浏览器进入自己的拖拽循环，`wheel` 事件
- * 基本不会再派发给页面。这正是各家看板库一律实现"拖到边缘自动滚"的原因，不是偷懒。
- * 所以两条路都接上：**真能收到滚轮就照滚**（那是用户最直接想要的），收不到就靠
- * **边缘自动滚**兜底——把指针挪到视图上边缘，它自己往上滚，效果一样是"能滚回去看清再放"。
+ * 【为什么必须自己做】原生拖拽一按下去，浏览器就进入它自己的模态拖拽循环，
+ * 这期间 **wheel 事件根本不会派发给页面**——按住左键拖着、同时想滚滚轮找位置，
+ * 这件事在原生拖拽下无论怎么写都做不到（试过在拖拽期间监听 wheel，一次都收不到）。
+ * 而四象限一旦卡片多起来，拖着拖着视图就滚到下面、四个格子全出了屏幕，
+ * 手里还捏着卡片、松手落到哪儿全凭猜。所以原生拖拽在这个面板里是死路。
+ *
+ * 换成指针事件之后，整个过程页面就是普通页面：**滚轮就是普通滚轮，照常滚**，
+ * 顺带还能做原生做不了的事（拖到边缘自动滚、Esc 取消、跟手的影子）。
+ * 代价是三件浏览器本来免费给的事得自己写：影子、落点判定、光标。
  *
  * 【滚的是 #view 不是窗口】桌面端 body 是 overflow:hidden（应用外壳布局），整页根本不滚；
  * 真正的滚动容器是 #view。对着 window.scrollBy 使劲是一点反应都没有的。
+ *
+ * 【只接鼠标和手写笔】触屏不接：触屏上要先区分"想滚列表"还是"想拖卡片"，
+ * 没有把握就别抢走滚动。手机端本来也没有拖拽（原生 HTML5 拖拽在触屏上压根不触发），
+ * 页面上给触屏的说明是"点开任务改优先级"，维持原样。
  */
-const DS = { on: false, y: null, raf: 0, el: null, until: 0 };
-const DS_HOT = 110;      // 离容器上/下边缘这么近就开始自动滚
-const DS_MAX = 26;       // 每帧最多滚这么多像素，越靠边越快
+const DG = {
+  live: false,     // 已经真的拖起来了（越过阈值）
+  pend: null,      // 按下了、还没越过阈值
+  card: null, ghost: null, zone: null, data: null,
+  x: 0, y: 0,      // 指针视口坐标
+  dx: 0, dy: 0,    // 指针相对卡片左上角的偏移，保证影子跟手不跳
+  raf: 0,
+};
+const DG_SLOP = 5;       // 动超过这么多像素才算拖，否则算点击（不然点一下就误触发）
+const DG_HOT = 110;      // 指针离滚动容器上/下边缘这么近就自动滚
+const DG_MAX = 26;       // 每帧最多滚这么多像素，越靠边越快
 
-function dsScroller() {
+function dgScroller() {
   const v = $('view');
   return v && v.scrollHeight > v.clientHeight ? v : document.scrollingElement;
 }
 
-function dsStart() {
-  if (DS.on) return;
-  DS.on = true;
-  DS.el = dsScroller();
-  DS.y = null;
-  // 保险丝：拖到浏览器外面等情况下 dragend 可能不来，不能让 wheel 被永久劫持
-  DS.until = Date.now() + 60000;
-  document.addEventListener('dragover', dsMove, true);
-  document.addEventListener('wheel', dsWheel, { passive: false, capture: true });
-  DS.raf = requestAnimationFrame(dsTick);
-  // 内容没超出一屏就没得滚，别弹个没用的提示碍眼
-  const tip = $('dragtip');
-  if (tip) tip.hidden = !(DS.el && DS.el.scrollHeight > DS.el.clientHeight + 4);
+/** 落点：看板的列 / 四象限的格子 / 收口区。用选择器现找，不预先绑——卡片每次 render 都重建。 */
+function dgZoneAt(x, y) {
+  const el = document.elementFromPoint(x, y);   // 影子是 pointer-events:none，不会挡这里
+  return el ? el.closest('#view .col, #view .qbox, #view .qbin') : null;
 }
 
-function dsStop() {
-  if (!DS.on) return;
-  DS.on = false;
-  cancelAnimationFrame(DS.raf);
-  document.removeEventListener('dragover', dsMove, true);
-  document.removeEventListener('wheel', dsWheel, { capture: true });
-  DS.el = null; DS.y = null;
+/** 落下时干什么。三种落点各一套，和原来原生拖拽时的行为逐字一致。 */
+function dgDrop(zone, d) {
+  if (zone.classList.contains('col')) {
+    const st = zone.dataset.status;
+    if (st) patch(d.name, d.bucket, { status: st }, '已改为「' + ST_CN[st] + '」');
+    return;
+  }
+  if (zone.classList.contains('qbin')) {
+    const st = zone.dataset.done;
+    if (st) patch(d.name, d.bucket, { status: st }, '已改为「' + ST_CN[st] + '」');
+    return;
+  }
+  // 四象限：优先级直接落；"紧不紧急"是截止日算出来的，对不上就问一句截止日定几号。
+  // （左半边那两格全是「紧急」，不问的话往左拖必然弹回右边——四个格子会有两个是摆设。）
+  const q = QUAD.find((x) => x.k === zone.dataset.quad);
+  if (!q) return;
+  const t = S.tasks.find((x) => x.name === d.name);
+  if (t && isUrgent(t) !== q.urgent) return openQuadDlg(t, q);
+  patch(d.name, d.bucket, { priority: q.pri }, '优先级已设为「' + q.pri + '」');
+}
+
+function dgDown(e) {
+  if (S.offline) return;                       // 离线只读，拖了也写不进去
+  if (e.pointerType === 'touch') return;       // 触屏不接，理由见上
+  if (e.button !== 0) return;                  // 只认左键：右键要留给菜单
+  const card = e.target.closest('#view .card');
+  if (!card || !card.dataset.name) return;
+  DG.pend = { el: card, x: e.clientX, y: e.clientY, id: e.pointerId };
+  DG.x = e.clientX; DG.y = e.clientY;
+  document.addEventListener('pointermove', dgMove, true);
+  document.addEventListener('pointerup', dgUp, true);
+  document.addEventListener('pointercancel', dgCancel, true);
+}
+
+function dgMove(e) {
+  DG.x = e.clientX; DG.y = e.clientY;
+  if (DG.live) { e.preventDefault(); return; }
+  const p = DG.pend;
+  if (!p) return;
+  if (Math.abs(e.clientX - p.x) <= DG_SLOP && Math.abs(e.clientY - p.y) <= DG_SLOP) return;
+  dgBegin();
+}
+
+function dgBegin() {
+  const card = DG.pend.el;
+  DG.live = true;
+  DG.card = card;
+  DG.data = { name: card.dataset.name, bucket: card.dataset.bucket };
+
+  const r = card.getBoundingClientRect();
+  DG.dx = DG.pend.x - r.left;
+  DG.dy = DG.pend.y - r.top;
+
+  // 指针捕获：手滑出窗口外也照样收得到 move/up，不会留下一个永远拖着的影子。
+  // 注意它只管指针事件，wheel 不受影响——滚轮依然正常滚页面，这正是要的。
+  try { card.setPointerCapture(DG.pend.id); } catch (_) {}
+
+  const g = card.cloneNode(true);
+  g.classList.add('ghost');
+  g.style.width = r.width + 'px';
+  DG.ghost = g;
+  document.body.appendChild(g);
+  card.classList.add('lifted');
+  document.body.classList.add('dragging');
+
+  // 内容没超出一屏就没得滚，别弹个没用的提示碍眼
+  const sc = dgScroller();
+  const tip = $('dragtip');
+  if (tip) tip.hidden = !(sc && sc.scrollHeight > sc.clientHeight + 4);
+
+  window.addEventListener('keydown', dgKey, true);
+  DG.raf = requestAnimationFrame(dgTick);
+}
+
+function dgTick() {
+  if (!DG.live) return;
+  if (DG.ghost) {
+    DG.ghost.style.left = (DG.x - DG.dx) + 'px';
+    DG.ghost.style.top = (DG.y - DG.dy) + 'px';
+  }
+
+  // 边缘自动滚：滚轮之外的第二条路，手不用离开卡片也能把视图挪回去
+  const sc = dgScroller();
+  if (sc) {
+    const r = sc === document.scrollingElement
+      ? { top: 0, bottom: window.innerHeight }
+      : sc.getBoundingClientRect();
+    const up = DG.y - r.top, down = r.bottom - DG.y;
+    let d = 0;
+    if (up < DG_HOT) d = -Math.ceil(DG_MAX * (1 - Math.max(up, 0) / DG_HOT));
+    else if (down < DG_HOT) d = Math.ceil(DG_MAX * (1 - Math.max(down, 0) / DG_HOT));
+    if (d) sc.scrollTop += d;
+  }
+
+  // 落点每帧重算，而不是只在指针移动时算：滚轮滚过之后指针没动，
+  // 但同一个屏幕坐标底下已经换成别的格子了，不重算就会落错地方。
+  const z = dgZoneAt(DG.x, DG.y);
+  if (z !== DG.zone) {
+    if (DG.zone) DG.zone.classList.remove('drag');
+    DG.zone = z;
+    if (z) z.classList.add('drag');
+  }
+  DG.raf = requestAnimationFrame(dgTick);
+}
+
+function dgKey(e) {
+  if (e.key !== 'Escape') return;
+  e.preventDefault(); e.stopPropagation();     // 别顺手把抽屉/弹窗也关了
+  DG.zone = null;                              // 取消 = 不落地
+  dgFinish();
+}
+
+function dgUp() {
+  const zone = DG.zone, data = DG.data, was = DG.live;
+  dgFinish();
+  if (was && zone && data && data.name) dgDrop(zone, data);
+}
+
+function dgCancel() { DG.zone = null; dgFinish(); }
+
+function dgFinish() {
+  DG.pend = null;
+  document.removeEventListener('pointermove', dgMove, true);
+  document.removeEventListener('pointerup', dgUp, true);
+  document.removeEventListener('pointercancel', dgCancel, true);
+  if (!DG.live) return;                        // 只是点了一下，没拖起来
+  DG.live = false;
+  cancelAnimationFrame(DG.raf);
+  window.removeEventListener('keydown', dgKey, true);
+  if (DG.ghost) DG.ghost.remove();
+  if (DG.card) DG.card.classList.remove('lifted');
+  if (DG.zone) DG.zone.classList.remove('drag');
+  DG.ghost = DG.card = DG.zone = DG.data = null;
+  document.body.classList.remove('dragging');
   const tip = $('dragtip');
   if (tip) tip.hidden = true;
+  // 松手后浏览器还会补一个 click，不拦掉会顺手把抽屉打开——拖完弹出个抽屉很莫名其妙
+  document.addEventListener('click', dgSwallow, true);
+  setTimeout(() => document.removeEventListener('click', dgSwallow, true), 0);
 }
 
-function dsMove(e) { DS.y = e.clientY; }
-
-/** 拖拽期间真收到滚轮就直接照滚。收得到最好——这是最顺手的那条路。 */
-function dsWheel(e) {
-  if (!DS.on || !DS.el) return;
-  e.preventDefault();
-  DS.el.scrollTop += e.deltaY;
-}
-
-function dsTick() {
-  if (!DS.on) return;
-  if (Date.now() > DS.until) return dsStop();
-  const el = DS.el;
-  if (el && DS.y != null) {
-    // 容器的可视上下边：#view 用它自己的矩形，整页滚时就是视口
-    const r = el === document.scrollingElement
-      ? { top: 0, bottom: window.innerHeight }
-      : el.getBoundingClientRect();
-    const up = DS.y - r.top, down = r.bottom - DS.y;
-    let d = 0;
-    if (up < DS_HOT) d = -Math.ceil(DS_MAX * (1 - Math.max(up, 0) / DS_HOT));
-    else if (down < DS_HOT) d = Math.ceil(DS_MAX * (1 - Math.max(down, 0) / DS_HOT));
-    if (d) el.scrollTop += d;
-  }
-  DS.raf = requestAnimationFrame(dsTick);
+function dgSwallow(e) {
+  document.removeEventListener('click', dgSwallow, true);
+  e.stopPropagation(); e.preventDefault();
 }
 
 // 绑 document、只绑一次：卡片每次 render 都重建，绑到卡片上必漏。
-document.addEventListener('dragstart', dsStart, true);
-document.addEventListener('dragend', dsStop, true);
-document.addEventListener('drop', dsStop, true);
-
-/** 看板拖拽：拖到另一列 = 改状态。 */
-function wireDragBoard() {
-  document.querySelectorAll('#view .card').forEach((c) => {
-    c.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', JSON.stringify({ name: c.dataset.name, bucket: c.dataset.bucket }));
-    });
-  });
-  document.querySelectorAll('#view .col').forEach((col) => {
-    col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag'); });
-    col.addEventListener('dragleave', () => col.classList.remove('drag'));
-    col.addEventListener('drop', (e) => {
-      e.preventDefault(); col.classList.remove('drag');
-      const d = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
-      if (d.name) patch(d.name, d.bucket, { status: col.dataset.status }, '已改为「' + ST_CN[col.dataset.status] + '」');
-    });
-  });
-}
-
-/**
- * 四象限拖拽。
- *
- * 原来这里只设优先级，说法是"紧急与否由截止日客观算出，不靠拖"。原则没错，落地错了：
- * 左半边那两格（重要且紧急 / 不重要但紧急）全是「紧急」，而拖动压根不碰截止日，
- * 于是往左拖必然当场弹回右边——**四个格子有两个永远放不进东西**，用户只会以为拖拽坏了。
- * 更糟的是唯一那句提示 toast 紧接着就被"优先级已设为…"的成功 toast 冲掉，等于没提示。
- *
- * 现在：优先级照旧直接落（这半边没歧义）；紧急与否对不上时，**问一句截止日定几号**，
- * 然后优先级 + 截止日一次写入。紧急依然是截止日算出来的，但你拖的那一下真的算数。
- */
-function wireDragQuad() {
-  document.querySelectorAll('#view .qbox').forEach((box) => {
-    box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('drag'); });
-    box.addEventListener('dragleave', () => box.classList.remove('drag'));
-    box.addEventListener('drop', (e) => {
-      e.preventDefault(); box.classList.remove('drag');
-      const d = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
-      const q = QUAD.find((x) => x.k === box.dataset.quad);
-      if (!d.name || !q) return;
-      const t = S.tasks.find((x) => x.name === d.name);
-      if (t && isUrgent(t) !== q.urgent) return openQuadDlg(t, q);
-      patch(d.name, d.bucket, { priority: q.pri }, '优先级已设为「' + q.pri + '」');
-    });
-  });
-
-  // 收口区：做完了 / 不做了。四象限原来只能往里放、不能收，任务做完也只能一直躺在格子里。
-  document.querySelectorAll('#view .qbin').forEach((bin) => {
-    bin.addEventListener('dragover', (e) => { e.preventDefault(); bin.classList.add('drag'); });
-    bin.addEventListener('dragleave', () => bin.classList.remove('drag'));
-    bin.addEventListener('drop', (e) => {
-      e.preventDefault(); bin.classList.remove('drag');
-      const d = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
-      const st = bin.dataset.done;
-      if (!d.name || !st) return;
-      patch(d.name, d.bucket, { status: st }, '已改为「' + ST_CN[st] + '」');
-    });
-  });
-}
+document.addEventListener('pointerdown', dgDown, true);
 
 /** 本地日期 → yyyy-mm-dd。不能用 toISOString()：那是 UTC，东八区傍晚之后会差一天。 */
 function ymd(dt) {
