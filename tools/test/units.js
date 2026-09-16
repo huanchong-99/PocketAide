@@ -553,6 +553,9 @@ test('U9 面板桌面: 看板锁高的底部留白, CSS 和 JS 必须是同一�
   assert(fit, '找不到 fitBoard');
   assert(/innerWidth\s*<=\s*760/.test(fit[0]), 'fitBoard 没有窄屏退出分支, 手机上会被锁高');
   assert(/avail\s*<\s*\d+/.test(fit[0]), 'fitBoard 没有"可用高度太小就退回整页滚"的兜底');
+  // 只有四列并排成一行时锁高才成立。962px(1920 屏左右分屏)降成两列两行, 每列仍按整屏高
+  // 算的话两行叠起来页面照样滚 —— 实测 fitted=true 而 pageScrolls=true, 比不锁还糟。
+  assert(/offsetTop/.test(fit[0]), 'fitBoard 没有判断网格是不是单行, 降成两列时会把页面撑得更长');
 });
 
 test('U9 面板桌面: 快捷键不许在输入框里抢按键, 浮层开着时也不许生效', () => {

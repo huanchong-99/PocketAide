@@ -442,7 +442,11 @@ function fitBoard() {
   wrap.classList.remove('fitted');
   if (!cols) return;
   cols.classList.remove('fit');
+  // 只有四列并排成一行时锁高才有意义。窄到降两列/单列时网格是多行，
+  // 每列还按整屏高算的话两行叠起来页面照样滚——比不锁更糟。
+  // 用"所有列 offsetTop 相同"判断而不是写死断点：以后再加断点也不用回来改这里。
   if (innerWidth <= 760) return;
+  if (new Set([...cols.children].map((c) => c.offsetTop)).size > 1) return;
   // getBoundingClientRect().top + scrollY = 文档坐标，跟当前滚没滚无关，所以这个值稳定。
   // 底部要按 .fitted 的留白算，否则整页还差几十像素能滚——那看板就白锁了。
   const avail = Math.floor(innerHeight - (cols.getBoundingClientRect().top + scrollY) - FIT_PAD);
