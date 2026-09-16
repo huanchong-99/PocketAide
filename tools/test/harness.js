@@ -10,6 +10,15 @@ const { PtyClaude } = require('../../bridge/lib/pty-claude');
 
 const REPO = path.join(__dirname, '..', '..');
 
+// 出件文件：飞书那头真正收到的就是它（bridge 优先读 outbox，抓屏只是兜底）。
+// 只在 mtime 比发问前新时才算本轮产物，**绝不删**——删了会吃掉桥接正要发给用户的回复。
+const OUTBOX = path.join(REPO, 'workspace', '.outbox', 'reply.md');
+const outboxMtime = () => { try { return fs.statSync(OUTBOX).mtimeMs; } catch (_) { return 0; } };
+function outboxSince(t0) {
+  try { if (fs.statSync(OUTBOX).mtimeMs > t0) return fs.readFileSync(OUTBOX, 'utf8'); } catch (_) {}
+  return '';
+}
+
 // 一个会话：可连续 say() 多轮，模拟一段飞书对话（含二次确认这类多轮）。
 class Session {
   constructor(opts = {}) {
@@ -32,13 +41,22 @@ class Session {
     this.c = new PtyClaude(this.opts);
     await this.c.start();
   }
-  // 发一句话，返回本会话自己 PTY 屏幕抓取的回复。
-  // **绝不读共享出件文件 workspace/.outbox/reply.md**：那是全局单文件，桥接/其他终端的 claude
-  // 也会往里写，会串台（曾把别的会话的"5050"读成本测试的回复，导致假失败）。抓屏是本 PTY 独有、
-  // 天然隔离；测试断言只看文本内容(关键词/副作用)，markdown 符号丢失不影响断言。
+  // 发一句话，返回**两个通道拼起来**的回复：本会话 PTY 的抓屏 + 本轮写出的 outbox 出件。
+  //
+  // 为什么两个都要：飞书那头收到的是 outbox（bridge 优先读它，抓屏只是兜底），而 CLAUDE.md
+  // 要求终端保持简短、把完整正文写进 outbox。只看抓屏，claude 越守规矩测试越容易假失败——
+  // 实测 3c 问"任务做到哪了"，终端只印了"状态已回。"，出件里是完整进度，判了 FAIL。
+  // 反过来只看 outbox 也不行：它是全局单文件，桥接/别的终端会话也写，会串台
+  //（曾把别的会话的"5050"读成本测试的回复）。拼起来则两边都要为空才算失败，
+  // 既不会假失败、也不会把"用户其实没收到内容"放过去。
+  //
+  // 出件只认 mtime 比发问时新的，且**绝不删**——删了会吃掉桥接正要发给用户的那条回复。
   async say(text) {
+    const t0 = outboxMtime();
     try {
-      return await this.c.ask(text);
+      const scraped = await this.c.ask(text);
+      const filed = outboxSince(t0);
+      return filed ? scraped + '\n' + filed : scraped;
     } catch (e) {
       // 会话已废(卡死/退出)→ 重建, 让下一条用例用新会话继续; 当前这条仍判失败。
       if (/hard-timeout|会话中途退出|session not ready|busy/.test((e && e.message) || '')) {

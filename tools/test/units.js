@@ -534,6 +534,59 @@ test('U9 面板布局: 网格轨道一律 minmax(0,1fr), 不许裸 1fr', () => {
   assert(bad.length === 0, '这些网格声明用了裸 fr 轨道(会被内容撑破): ' + JSON.stringify(bad));
 });
 
+test('U9 面板桌面: 看板锁高的底部留白, CSS 和 JS 必须是同一个数', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  // 桌面看板把每列高度钉到"视口还剩多少", 目的是整页一点都不滚。算可用高度时要把
+  // .wrap 的底部留白扣掉 —— 第一版按 24 硬编码, 而 .wrap 的 padding-bottom 是 60,
+  // 结果整页还剩 35px 能滚, 看板白锁。两个数必须同源, 改一个忘另一个就会再犯。
+  const js = /const FIT_PAD\s*=\s*(\d+)/.exec(html);
+  const css = /\.wrap\.fitted\s*\{[^}]*padding-bottom\s*:\s*(\d+)px/.exec(html);
+  assert(js, '找不到 FIT_PAD');
+  assert(css, '找不到 .wrap.fitted 的 padding-bottom');
+  assert(js[1] === css[1], `FIT_PAD=${js[1]} 与 .wrap.fitted 的 padding-bottom=${css[1]}px 对不上, 整页会残留可滚动高度`);
+
+  // 列内滚必须配吸顶列头: 不然滚到第 10 张卡时已经不知道自己在哪一列了
+  assert(/\.cols\.fit \.col h3\{[^}]*position:sticky/.test(html.replace(/\s+/g, ' ')) ||
+    /\.cols\.fit \.col h3\s*\{[^}]*position\s*:\s*sticky/.test(html), '列内滚动了但列头没吸顶');
+  // 窄屏必须退回整页滚: 单列还锁高度 = 页面里套一个小滚动条, 手机上极难用
+  const fit = /function fitBoard\(\)[\s\S]*?\n}/.exec(html);
+  assert(fit, '找不到 fitBoard');
+  assert(/innerWidth\s*<=\s*760/.test(fit[0]), 'fitBoard 没有窄屏退出分支, 手机上会被锁高');
+  assert(/avail\s*<\s*\d+/.test(fit[0]), 'fitBoard 没有"可用高度太小就退回整页滚"的兜底');
+});
+
+test('U9 面板桌面: 快捷键不许在输入框里抢按键, 浮层开着时也不许生效', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  const h = /document\.addEventListener\('keydown'[\s\S]*?\n}\);/.exec(html);
+  assert(h, '找不到全局 keydown 处理');
+  const body = h[0];
+  // 单键快捷键(n/r/1-6//)最容易出的事: 在搜索框里打 "n" 结果弹出了新建任务弹窗。
+  const guard = body.indexOf('if (typing');
+  assert(guard > 0, 'keydown 里没有 typing 守卫, 在输入框打字会触发快捷键');
+  for (const k of ["e.key === '/'", "e.key === 'n'", "e.key === 'r'", "e.key >= '1'"]) {
+    assert(body.indexOf(k) > guard, `${k} 出现在 typing 守卫之前, 打字时会被抢走`);
+  }
+  // 抽屉/新建弹窗开着时, 单键也得让路(那时候 Esc 才是唯一该响应的键)
+  assert(body.indexOf("$('drawer').classList.contains('on')") > guard, '浮层开着时单键快捷键没有让路');
+  // Esc 必须在守卫之前: 输入框里按 Esc 也得能退出来
+  assert(body.indexOf("e.key === 'Escape'") < guard, 'Escape 被 typing 守卫挡住了, 在输入框里就按不动');
+});
+
+test('U9 面板桌面: 抽屉进浏览器历史必须防环, 关闭不能反复触发后退', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  // 电脑上「后退」该关抽屉而不是退出面板, 所以 open 会 pushState、closeDrawer 会 back。
+  // 但 popstate 本身就要关抽屉 —— 那一路要是再 back 一次就退过头, 一路退出整个面板。
+  const close = /function closeDrawer\(\)[\s\S]*?\n}/.exec(html);
+  const pop = /addEventListener\('popstate'[\s\S]*?\n}\);/.exec(html);
+  assert(close && pop, '找不到 closeDrawer / popstate 处理');
+  assert(/history\.back\(\)/.test(close[0]), 'closeDrawer 没有回退历史, 按一次后退会把抽屉勾回来');
+  assert(/!navPop/.test(close[0]), 'closeDrawer 没有防环标记, popstate 关闭时会连退两格');
+  assert(/navPop\s*=\s*true/.test(pop[0]) && /navPop\s*=\s*false/.test(pop[0]), 'popstate 没有正确置位/复位防环标记');
+  assert(/finally/.test(pop[0]), '防环标记没放在 finally 里, open 抛错就会永久卡住');
+  // 打开一个已经不存在的书签不能静默失败
+  assert(/function bootHash\(\)[\s\S]*?已经不在了/.test(html), '死书签(任务已删)没有给提示');
+});
+
 test('U9 面板编辑: 重写下一步计划不破坏文件, 且能识别"没变化"', () => {
   const T = require(path.join(REPO, 'tools', 'panel', 'tasks.js'));
   const src = ['---', 'type: task', 'status: running', 'created: 2026-01-02 03:04', '---', '',

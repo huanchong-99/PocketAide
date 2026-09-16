@@ -60,6 +60,9 @@
   .b-warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
   .b-bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
   .b-ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+  .b-focus{background:var(--purple-bg);border-color:var(--purple-line);color:var(--purple)}
+  .bfocus{color:inherit;font-weight:600;white-space:nowrap;margin-left:6px;text-underline-offset:3px}
+  .bfocus:hover{text-decoration:none;background:#14141314;border-radius:5px}
 
   /* 看板 */
   /* minmax(0,1fr) 而不是 1fr：1fr 的下限是 auto（= 内容最小宽度），卡片里那条
@@ -69,6 +72,20 @@
   .col.drag{border-color:var(--acc);background:var(--ivory-dark)}
   .col h3{margin:2px 0 10px;font-size:13px;display:flex;justify-content:space-between;color:var(--dim);font-weight:600}
   .col h3 b{color:var(--fg)}
+
+  /* 桌面看板：每列各自滚，页面本身不滚。
+     1920 屏实测四列高度 [1341,150,457,150]：想看「进行中」最后一张卡就得把整页往下拉，
+     一拉，另外三列早就到底了，1191px 的空白跟着你一路滚，列头也全滚没了。
+     .fit 由 fitBoard() 按实际可用高度加上，横幅多几条、窗口很矮都不会算错。 */
+  .wrap.fitted{padding-bottom:18px}
+  .cols.fit .col{max-height:var(--boardh);overflow-y:auto;overscroll-behavior:contain;padding-top:0}
+  .cols.fit .col h3{position:sticky;top:0;z-index:1;margin:0 -10px 10px;padding:10px 10px 8px;
+                    background:var(--card2);box-shadow:0 1px 0 var(--line)}
+  /* 四条系统默认滚动条并排立在卡片边上太抢眼，收细 */
+  .cols.fit .col{scrollbar-width:thin;scrollbar-color:var(--cloud-light) transparent}
+  .cols.fit .col::-webkit-scrollbar{width:8px}
+  .cols.fit .col::-webkit-scrollbar-thumb{background:var(--cloud-light);border-radius:99px}
+  .cols.fit .col::-webkit-scrollbar-track{background:transparent}
 
   /* 卡片 */
   .card{background:var(--card);border:1px solid var(--line);border-left-width:3px;border-radius:9px;
@@ -140,6 +157,19 @@
   .toast.bad{background:#8f2f4c;border-color:#8f2f4c;color:#fff}
   .ro .card,.ro tbody tr{cursor:default}
 
+  /* 快捷键速查（按 ?）。不做成弹窗浮层：它不该挡住你正在看的看板。 */
+  .keys{position:fixed;right:20px;bottom:20px;z-index:60;display:none;
+        background:var(--card);border:1px solid var(--line2);border-radius:11px;
+        box-shadow:0 10px 30px #14141422;padding:12px 14px;font-size:12.5px;min-width:250px}
+  .keys.on{display:block}
+  .keys h4{margin:0 0 8px;font-size:12px;color:var(--dim);font-weight:600}
+  .keys div{display:flex;justify-content:space-between;gap:16px;padding:2.5px 0;color:var(--dim)}
+  .keys kbd{font:600 11.5px ui-monospace,Consolas,monospace;color:var(--fg);
+            background:var(--ivory-med);border:1px solid var(--line2);border-radius:5px;padding:1px 6px}
+  .khint{background:none;border:none;color:var(--dim2);font-size:12px;cursor:pointer;padding:6px 4px}
+  .khint:hover{color:var(--fg)}
+  @media (max-width:760px){ .keys,.khint{display:none} }   /* 触屏没键盘，别占地方 */
+
   /* 新建任务弹窗 */
   .dlg{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:42;display:none;
        background:var(--card);border:1px solid var(--line2);border-radius:14px;
@@ -155,6 +185,11 @@
      卡片被截断，等于装了也没法用。所以窄屏逐级降列，并且把桌面才有的
      拖拽提示换成触屏能懂的说法（HTML5 drag 在触屏上根本不触发）。 */
   .only-narrow{display:none}
+  /* 宽屏别硬卡在 1500：1920 屏上那是 422px 白边（22% 的屏幕），换来的是四列各 355px、
+     标题和「下一步」双双截断。放到 1780 后每列 425px，同样的卡片能多显十来个字。 */
+  @media (min-width:1700px){
+    .wrap{max-width:1780px}
+  }
   @media (max-width:1100px){
     .cols{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
@@ -206,6 +241,7 @@
     <span class="grow"></span>
     <button id="btnNew" class="primary">+ 新建任务</button>
     <button id="btnReload">刷新</button>
+    <button id="btnKeys" class="khint" title="快捷键">?</button>
   </div>
 
   <div id="view"></div>
@@ -242,6 +278,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="keys" id="keys"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -254,6 +291,9 @@ const closed = (t) => t.status === 'done' || t.status === 'cancelled';
 
 let S = { tasks: [], health: null, meta: {}, link: null, offline: false };
 let cur = null;               // 抽屉里打开的任务
+// 体检横幅点「只看这些」后的聚焦集合：{label, names:Set}。不落 prefs——
+// 它是"我现在要处理这一批"的临时视角，不该在明天打开面板时还扣着。
+let focus = null;
 
 // 视图/筛选/排序记在本地：每次刷新都跳回「看板·无筛选」很烦——
 // 你盯着"项目=求职"看了一上午，一次自动刷新就给你清了。
@@ -327,8 +367,15 @@ function visible(bucket) {
   // haystack 由服务端拼好下发（标题+项目+说明+进度+下一步，已小写、已截断）。
   return S.tasks.filter((t) =>
     t.bucket === bucket &&
+    (!focus || focus.names.has(t.name)) &&
     (!q || (t.haystack || (t.title + ' ' + t.name).toLowerCase()).includes(q)) &&
     (!h || t.horizon === h) && (!p || t.project === p) && (!pri || t.priority === pri));
+}
+
+/** 体检横幅点进来的"只看这些"。任务可能横跨多列，所以看板/列表都照样管用。 */
+function setFocus(names, label) {
+  focus = names && names.length ? { label, names: new Set(names) } : null;
+  render();
 }
 
 // ---------------------------------------------------------------- 卡片
@@ -363,6 +410,7 @@ const cardHtml = (t) =>
 function render() {
   $('sub').innerHTML = subLine();
   $('banners').innerHTML = banners();
+  syncTitle();
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.v === view));
   const v = $('view');
   if (view === 'board') v.innerHTML = renderBoard();
@@ -372,6 +420,37 @@ function render() {
   else if (view === 'archive') v.innerHTML = renderList('archive');
   else v.innerHTML = renderHealth();
   wire();
+  fitBoard();
+}
+
+/** 标签页标题带上信号。面板在电脑上多半是钉住的后台标签——
+    切过去之前就该知道有没有事，而不是"任务面板"四个字看一整天。 */
+function syncTitle() {
+  const h = S.health || {}, bits = [];
+  if (S.offline) bits.push('离线');
+  else if (S.link && !S.link.ok) bits.push('⚠ 联动断开');
+  if (h.overdue && h.overdue.length) bits.push('⛔' + h.overdue.length);
+  if (h.stale && h.stale.length) bits.push('⏳' + h.stale.length);
+  document.title = (bits.length ? bits.join(' ') + ' · ' : '') + '任务面板';
+}
+
+/** 桌面看板：把每列高度钉到"视口还剩多少"，列内自己滚、页面不滚、列头吸顶。
+    窄屏（单列）不适用——那里整页滚才是对的，锁高度只会变成四个小滚动条。 */
+const FIT_PAD = 18;   // 看板锁高时页面底部留白，和 .wrap.fitted 的 padding-bottom 一致
+function fitBoard() {
+  const wrap = $('wrap'), cols = document.querySelector('#view .cols');
+  wrap.classList.remove('fitted');
+  if (!cols) return;
+  cols.classList.remove('fit');
+  if (innerWidth <= 760) return;
+  // getBoundingClientRect().top + scrollY = 文档坐标，跟当前滚没滚无关，所以这个值稳定。
+  // 底部要按 .fitted 的留白算，否则整页还差几十像素能滚——那看板就白锁了。
+  const avail = Math.floor(innerHeight - (cols.getBoundingClientRect().top + scrollY) - FIT_PAD);
+  // 横幅堆了好几条、或者窗口本来就矮：可用高度太小就退回整页滚，别把列压成一条缝
+  if (avail < 260) return;
+  cols.style.setProperty('--boardh', avail + 'px');
+  cols.classList.add('fit');
+  wrap.classList.add('fitted');
 }
 
 function subLine() {
@@ -382,9 +461,22 @@ function subLine() {
   return bits.join(' · ');
 }
 
+// 体检横幅上的「只看这些 →」。以前横幅只是句报告：告诉你有 6 个停滞任务，
+// 然后你得自己回看板一个个找出是哪 6 个。电脑上这一步本该是一次点击。
+const focusSets = {};
+function focusLink(key, names, label) {
+  if (!names.length) return '';
+  focusSets[key] = { names, label };
+  return ' <a href="#" class="bfocus" data-focus="' + esc(key) + '">只看这些 →</a>';
+}
+
 function banners() {
   if (!S.health) return '';
   const h = S.health, out = [];
+  if (focus) {
+    out.push('<div class="banner b-focus">🔎 只看「<b>' + esc(focus.label) + '</b>」' +
+      '（' + focus.names.size + ' 个任务）<a href="#" class="bfocus" data-focus="">显示全部 ×</a></div>');
+  }
   // 联动状态优先：如果改动发不到飞书，这是你最该先知道的事——
   // 否则你在面板上改了一上午，以为手机那头都同步了，其实一条没出去。
   if (S.link && !S.link.ok && !S.offline) {
@@ -398,15 +490,18 @@ function banners() {
   }
   if (h.overdue && h.overdue.length) {
     out.push('<div class="banner b-bad">⛔ <b>' + h.overdue.length + '</b> 个任务已逾期：' +
-      h.overdue.slice(0, 3).map((x) => esc(x.title) + '（' + (-x.left) + ' 天）').join('、') + '</div>');
+      h.overdue.slice(0, 3).map((x) => esc(x.title) + '（' + (-x.left) + ' 天）').join('、') +
+      focusLink('overdue', h.overdue.map((x) => x.name), '已逾期') + '</div>');
   }
   if (h.stale && h.stale.length) {
     out.push('<div class="banner b-warn">⏳ <b>' + h.stale.length + '</b> 个进行中的任务停滞超过 ' +
-      h.staleThreshold + ' 天，最久 <b>' + h.stale[0].days + ' 天</b>：' + esc(h.stale[0].title) + '</div>');
+      h.staleThreshold + ' 天，最久 <b>' + h.stale[0].days + ' 天</b>：' + esc(h.stale[0].title) +
+      focusLink('stale', h.stale.map((x) => x.name), '停滞超过 ' + h.staleThreshold + ' 天') + '</div>');
   }
   if (h.duplicates && h.duplicates.length) {
     out.push('<div class="banner b-warn">🔁 发现 <b>' + h.duplicates.length + '</b> 组疑似重复：' +
-      h.duplicates.map((g) => g.map((x) => esc(x.title)).join(' × ')).join('；') + '</div>');
+      h.duplicates.map((g) => g.map((x) => esc(x.title)).join(' × ')).join('；') +
+      focusLink('dup', h.duplicates.flat().map((x) => x.name), '疑似重复') + '</div>');
   }
   return out.join('');
 }
@@ -520,9 +615,18 @@ function renderHealth() {
 
 // ---------------------------------------------------------------- 抽屉
 
+// 抽屉进浏览器历史：电脑上「后退」就该关掉抽屉、而不是把整个面板退没了；
+// 顺带 #t/任务名 可以直接收藏成书签，副屏上盯着某个任务时很有用。
+// navPop 防环：popstate 触发的关闭不能再 back 一次。
+let navPop = false;
+const taskHash = (name) => '#t/' + encodeURIComponent(name);
+
 async function open(name, bucket) {
   try {
     cur = await api('detail', { name, bucket });
+    if (location.hash !== taskHash(name)) {
+      history.pushState({ task: name, bucket: bucket || 'active' }, '', taskHash(name));
+    }
     $('dTitle').textContent = cur.title;
     $('dSub').textContent = (ST_CN[cur.status] || cur.status) + ' · 建于 ' + (cur.created || '—') +
       (cur.staleDays != null ? ' · 停滞 ' + cur.staleDays + ' 天' : '');
@@ -534,10 +638,23 @@ async function open(name, bucket) {
 }
 
 function closeDrawer() {
+  const wasOpen = $('drawer').classList.contains('on');
   $('mask').classList.remove('on');
   $('drawer').classList.remove('on');
   cur = null;
+  // 用叉/Esc/遮罩关的，也要把历史退回去，否则按一次「后退」又把抽屉勾回来
+  if (wasOpen && !navPop && history.state && history.state.task) history.back();
 }
+
+// 「后退」= 关抽屉；「前进」或直接打开带 #t/... 的书签 = 开那个任务
+addEventListener('popstate', async (e) => {
+  navPop = true;
+  try {
+    const st = e.state;
+    if (st && st.task) await open(st.task, st.bucket);
+    else closeDrawer();
+  } finally { navPop = false; }
+});
 
 function drawerBody(t) {
   const ro = S.offline ? ' disabled' : '';
@@ -615,6 +732,15 @@ function wire() {
   });
   if (!S.offline) { wireDragBoard(); wireDragQuad(); }
 }
+
+// 横幅上的「只看这些 →」/「显示全部 ×」。横幅每次 render 都重建，所以绑在容器上。
+$('banners').addEventListener('click', (e) => {
+  const a = e.target.closest('.bfocus');
+  if (!a) return;
+  e.preventDefault();
+  const set = focusSets[a.dataset.focus];
+  setFocus(set ? set.names : null, set ? set.label : '');
+});
 
 /** 看板拖拽：拖到另一列 = 改状态。 */
 function wireDragBoard() {
@@ -720,7 +846,43 @@ $('dClose').onclick = closeDrawer;
 // 遮罩和 Esc 现在服务两个浮层（抽屉 + 新建弹窗），关掉当前开着的那个
 const closeTop = () => { if ($('newDlg').classList.contains('on')) closeNewDlg(); else closeDrawer(); };
 $('mask').onclick = closeTop;
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTop(); });
+
+// ── 快捷键 ────────────────────────────────────────────────────────────
+// 电脑上这面板多半是常驻副屏、随手切过来看两眼的，一路摸鼠标点很别扭。
+// 单键只在"没在输入框里打字、没开浮层"时生效；Ctrl/⌘+K 是浏览器通用手势，哪都能按。
+const KEY_VIEWS = ['board', 'quad', 'list', 'group', 'archive', 'health'];
+const KEY_HELP = [
+  ['/ 或 Ctrl+K', '跳到搜索框'],
+  ['1 – 6', '切换视图（看板/四象限/列表/分组/归档/体检）'],
+  ['n', '新建任务'],
+  ['r', '刷新'],
+  ['Esc', '关抽屉 / 清空搜索'],
+  ['?', '显示这张表'],
+];
+document.addEventListener('keydown', (e) => {
+  const el = e.target, tag = (el.tagName || '').toLowerCase();
+  const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+
+  if (e.key === 'Escape') {
+    if ($('keys').classList.contains('on')) return $('keys').classList.remove('on');
+    // 搜索框里按 Esc 先清空搜索——比关掉整个抽屉更像你当下想要的
+    if (el === $('q') && $('q').value) { $('q').value = ''; savePrefs(); render(); return; }
+    closeTop();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault(); $('q').focus(); $('q').select(); return;
+  }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if ($('drawer').classList.contains('on') || $('newDlg').classList.contains('on')) return;
+
+  if (e.key === '/') { e.preventDefault(); $('q').focus(); $('q').select(); }
+  else if (e.key === '?') { e.preventDefault(); $('keys').classList.toggle('on'); }
+  else if (e.key >= '1' && e.key <= '6') {
+    view = KEY_VIEWS[+e.key - 1]; savePrefs(); render();
+  } else if (e.key === 'n') { e.preventDefault(); openNewDlg(); }
+  else if (e.key === 'r') { e.preventDefault(); reload(); }
+});
 
 // 新建任务用页面内表单，不用 prompt()：prompt 只能填一个字段，建完还得再开抽屉补周期、
 // 优先级、截止日；而且它是阻塞式原生弹窗，PWA 里样式失控、自动化里还会卡死会话。
@@ -767,8 +929,28 @@ document.querySelectorAll('.tab').forEach((b) =>
 ['q', 'fh', 'fp', 'fpri'].forEach((id) =>
   $(id).addEventListener('input', () => { savePrefs(); render(); }));
 
+$('keys').innerHTML = '<h4>快捷键</h4>' +
+  KEY_HELP.map(([k, d]) => '<div><kbd>' + esc(k) + '</kbd><span>' + esc(d) + '</span></div>').join('');
+$('btnKeys').onclick = () => $('keys').classList.toggle('on');
+
+// 改窗口大小要重算看板可用高度：桌面上把窗口拖到半屏、或接上副屏，都属于日常操作
+let fitT = 0;
+addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(fitBoard, 120); });
+
+/** 直接打开收藏的 #t/任务名：先把地址栏复位成干净基点，再照常 open() 推一条历史，
+    这样「后退」才有地方可退（否则第一次后退就把整个面板退没了）。 */
+function bootHash() {
+  const m = /^#t\/(.+)$/.exec(location.hash);
+  if (!m) return;
+  const name = decodeURIComponent(m[1]);
+  history.replaceState(null, '', location.pathname);
+  const t = S.tasks.find((x) => x.name === name);
+  if (t) open(t.name, t.bucket);
+  else toast('书签指向的任务「' + name + '」已经不在了', true);
+}
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-reload();
+reload().then(bootHash);
 setInterval(() => { if (!S.offline && !cur) reload(); }, 60000);
 </script>
 </body>
