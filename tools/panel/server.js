@@ -31,6 +31,21 @@ const PORT = Number(process.env.PANEL_PORT || 8787);
 const TOKEN_FILE = path.join(DIR, '.token');
 const TOKEN = loadOrCreateToken();
 
+// 体检横幅的「已读/不是重复」记在服务端而不是 localStorage：同一个人会在 1920、
+// 4K、手机三个地方打开同一个面板，在一处按掉的提醒不该在另一处又跳出来。
+const DISMISS_FILE = path.join(DIR, '.dismiss.json');
+
+function readDismiss() {
+  try { const j = JSON.parse(fs.readFileSync(DISMISS_FILE, 'utf8')); return j && typeof j === 'object' ? j : {}; }
+  catch (_) { return {}; }
+}
+function writeDismiss(m) {
+  // 原子写：直接覆盖的话，进程刚好在这一刻挂掉会留下半个 JSON，下次读就全丢了
+  const tmp = DISMISS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(m, null, 1), 'utf8');
+  fs.renameSync(tmp, DISMISS_FILE);
+}
+
 /** 持久 token：PWA 装好后靠 cookie 访问，token 不能每次重启就换，否则装了等于白装。 */
 function loadOrCreateToken() {
   try {
@@ -112,6 +127,7 @@ const API = {
       // 面板→飞书这条线现在通不通。放在主数据里一起下发，页面每次刷新都能看到，
       // 不用你去猜"我刚才改的到底有没有发出去"。
       link: EV.linkHealth(),
+      dismissed: readDismiss(),
       meta: {
         statuses: T.STATUSES, horizons: T.HORIZONS, priorities: T.PRIORITIES,
         projects: [...new Set(all.map((t) => t.fm.project).filter(Boolean))].sort(),
@@ -149,6 +165,22 @@ const API = {
     T.save(t);
     EV.record({ kind: 'next', name, title: t.title || name, to: ch.to });
     return { changed: true, task: T.toDetail(t, now()) };
+  },
+
+  /**
+   * 按掉一条体检横幅（或撤销）。
+   *
+   * key 由横幅内容算出（种类 + 涉及的任务名排序后拼接），所以「按掉」是针对
+   * **这一批任务**的，不是针对这类提醒的：再有新任务停滞、或重复组成员变了，
+   * key 就变了，横幅照常出现。这样既能让人把看过的提醒清掉，又不会把真·新问题一起静音。
+   */
+  async dismiss(b) {
+    const key = need(b.key, 'key');
+    const m = readDismiss();
+    if (b.undo) delete m[key];
+    else m[key] = { at: now().toISOString(), note: String(b.note || '') };
+    writeDismiss(m);
+    return { dismissed: m };
   },
 
   /** 归档。只放行 done/cancelled——安全底线在 tasks.archive 里，这里不重复判断。 */

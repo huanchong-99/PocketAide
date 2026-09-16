@@ -177,20 +177,20 @@ test('U6 数据安全 autocommit 钩子已接 + git 健康', () => {
 });
 
 // ===== U7 供应商切换底座：两条不变量 + 两条进程安全底线 =====
-// 这组测试钉死的是一次真实事故：bridge 旧同步逻辑"只覆盖不删除"，让终端跑官方模型、
-// 飞书跑第三方模型连续数周无人察觉。详见 tools/switch/README.md。
+// 这组测试钉死的是一次真实事故：bridge 旧同步逻辑"只覆盖不删除"，让终端跑 claude-opus-5、
+// 飞书跑 deepseek-v4-pro 整整六周无人察觉(2026-08-04→09-15)。详见 tools/switch/README.md。
 // 全部用纯函数 + 假数据，不碰用户真实配置、不动任何进程。
 test('U7 switch 不变量①: 落地前删净所有 ANTHROPIC_*(切回官方不留残影)', () => {
   const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
-  // 复刻当时的故障态: 卡在旧的第三方供应商, 还压着更早一家的残留
+  // 复刻当时的故障态: 卡在 DeepSeek, 还压着更早的智谱残留
   const dirty = {
-    model: 'vendor-b-old',
+    model: 'glm-5.2',
     hooks: { keep: 1 },
     env: {
-      ANTHROPIC_BASE_URL: 'https://api.vendor-a.test/anthropic',
+      ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
       ANTHROPIC_AUTH_TOKEN: 'sk-fake-for-test',
-      ANTHROPIC_MODEL: 'vendor-a-pro',
-      ANTHROPIC_REASONING_MODEL: 'vendor-b-reasoning',
+      ANTHROPIC_MODEL: 'deepseek-v4-pro',
+      ANTHROPIC_REASONING_MODEL: 'glm-5.1',
       CLAUDE_CODE_EFFORT_LEVEL: 'max',
     },
   };
@@ -204,8 +204,8 @@ test('U7 switch 不变量①: 落地前删净所有 ANTHROPIC_*(切回官方不�
 
 test('U7 switch 不变量②: 顶层 model 与 ANTHROPIC_MODEL 永远一致', () => {
   const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
-  // 旧顶层 model 是过期的上一家模型名, 落地新供应商后必须被覆盖, 不能两者打架
-  const out = sw.applyProvider({ model: 'vendor-b-old', env: {} }, {
+  // 旧顶层 model 是过期的 glm-5.2, 落地第三方后必须被新模型覆盖, 不能两者打架
+  const out = sw.applyProvider({ model: 'glm-5.2', env: {} }, {
     model: 'x-pro', env: { ANTHROPIC_BASE_URL: 'https://x.test/anthropic', ANTHROPIC_MODEL: 'x-pro' },
   });
   assert(out.model === out.env.ANTHROPIC_MODEL, `自相矛盾: 顶层=${out.model} env=${out.env.ANTHROPIC_MODEL}`);
@@ -214,8 +214,8 @@ test('U7 switch 不变量②: 顶层 model 与 ANTHROPIC_MODEL 永远一致', ()
 test('U7 switch 体检不误报: 别名与实跑模型归一', () => {
   const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
   assert(sw.modelMatches('opus[1m]', 'claude-opus-5'), '别名 opus[1m] 应认得 claude-opus-5');
-  assert(sw.modelMatches('vendor-a-flash[1M]', 'vendor-a-flash'), '[1M] 上下文后缀应被剥离');
-  assert(!sw.modelMatches('vendor-a-pro', 'vendor-b-old'), '真正的不一致必须报出来');
+  assert(sw.modelMatches('deepseek-v4-flash[1M]', 'deepseek-v4-flash'), '[1M] 上下文后缀应被剥离');
+  assert(!sw.modelMatches('deepseek-v4-pro', 'glm-5.2'), '真正的不一致必须报出来');
 });
 
 test('U7 procs 安全①: 绝不把 Claude 桌面应用当成 CLI', () => {
@@ -332,8 +332,8 @@ test('U7 复制入口: 全局→桥接整份覆盖, 第三方带 Key、官方不
   const sw = require(path.join(REPO, 'tools', 'switch', 'switch.js'));
   assert(typeof sw.CMDS['copy-global'] === 'function', '缺少 copy-global 命令');
   assert(typeof sw.CMDS.import !== 'function', '旧的 import(存成档案)语义已废弃, 不该还在');
-  // 复制必须是覆盖式: 合并同步不了"删除"——本机把 ANTHROPIC_* 整组删掉切回官方订阅时,
-  // 合并式传不过去, 桥接就卡在旧供应商上。那正是那次漂移事故的成因。
+  // 复制必须是覆盖式: 合并同步不了"删除"——本机把 ANTHROPIC_* 整组删掉切回官方时,
+  // 合并式传不过去, 桥接就卡在旧供应商上。那正是当初六周漂移的成因。
   const src = fs.readFileSync(path.join(REPO, 'tools', 'switch', 'switch.js'), 'utf8');
   const body = /async 'copy-global'\(a\) \{[\s\S]*?\n  \},/.exec(src);
   assert(body, '找不到 copy-global 实现');
@@ -534,28 +534,71 @@ test('U9 面板布局: 网格轨道一律 minmax(0,1fr), 不许裸 1fr', () => {
   assert(bad.length === 0, '这些网格声明用了裸 fr 轨道(会被内容撑破): ' + JSON.stringify(bad));
 });
 
-test('U9 面板桌面: 看板锁高的底部留白, CSS 和 JS 必须是同一个数', () => {
+test('U9 面板桌面: 整页锁死不滚, 滚动只发生在列内', () => {
   const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
-  // 桌面看板把每列高度钉到"视口还剩多少", 目的是整页一点都不滚。算可用高度时要把
-  // .wrap 的底部留白扣掉 —— 第一版按 24 硬编码, 而 .wrap 的 padding-bottom 是 60,
-  // 结果整页还剩 35px 能滚, 看板白锁。两个数必须同源, 改一个忘另一个就会再犯。
-  const js = /const FIT_PAD\s*=\s*(\d+)/.exec(html);
-  const css = /\.wrap\.fitted\s*\{[^}]*padding-bottom\s*:\s*(\d+)px/.exec(html);
-  assert(js, '找不到 FIT_PAD');
-  assert(css, '找不到 .wrap.fitted 的 padding-bottom');
-  assert(js[1] === css[1], `FIT_PAD=${js[1]} 与 .wrap.fitted 的 padding-bottom=${css[1]}px 对不上, 整页会残留可滚动高度`);
+  const flat = html.replace(/\s+/g, ' ');
+  // 用户原话: "我需要滚动页面才可以看完。而我滚动页面时, 其他内容就滚到上面, 我就看不着了"。
+  // 整页只要能滚, 就必然出现"为了看第 13 张卡, 把标题/横幅/工具栏/另外三列全滚出屏幕"。
+  // 所以桌面下 html+body 必须锁死, 由 flex 外壳分配高度、列内自己滚。
+  const desktop = /@media \(min-width:\s*761px\)\s*\{([\s\S]*?)\n  \}/.exec(html);
+  assert(desktop, '找不到桌面外壳的 min-width:761px 媒体查询');
+  assert(/html,\s*body\s*\{[^}]*overflow\s*:\s*hidden/.test(desktop[1]), '桌面下 html/body 没锁住 overflow, 整页还能滚');
+  assert(/#view\s*\{[^}]*flex\s*:\s*1[^}]*min-height\s*:\s*0/.test(desktop[1]), '#view 没有 flex:1+min-height:0, 吃不掉剩余高度');
+  assert(/\.colbody\s*\{[^}]*overflow-y\s*:\s*auto/.test(flat), '列内没有独立滚动容器 .colbody');
 
-  // 列内滚必须配吸顶列头: 不然滚到第 10 张卡时已经不知道自己在哪一列了
-  assert(/\.cols\.fit \.col h3\{[^}]*position:sticky/.test(html.replace(/\s+/g, ' ')) ||
-    /\.cols\.fit \.col h3\s*\{[^}]*position\s*:\s*sticky/.test(html), '列内滚动了但列头没吸顶');
-  // 窄屏必须退回整页滚: 单列还锁高度 = 页面里套一个小滚动条, 手机上极难用
-  const fit = /function fitBoard\(\)[\s\S]*?\n}/.exec(html);
-  assert(fit, '找不到 fitBoard');
-  assert(/innerWidth\s*<=\s*760/.test(fit[0]), 'fitBoard 没有窄屏退出分支, 手机上会被锁高');
-  assert(/avail\s*<\s*\d+/.test(fit[0]), 'fitBoard 没有"可用高度太小就退回整页滚"的兜底');
-  // 只有四列并排成一行时锁高才成立。962px(1920 屏左右分屏)降成两列两行, 每列仍按整屏高
-  // 算的话两行叠起来页面照样滚 —— 实测 fitted=true 而 pageScrolls=true, 比不锁还糟。
-  assert(/offsetTop/.test(fit[0]), 'fitBoard 没有判断网格是不是单行, 降成两列时会把页面撑得更长');
+  // 之前用 JS 算高度, 栽过两次(FIT_PAD 与 .wrap 底部留白对不上; 两列两行仍按整屏高算)。
+  // 现在必须是纯 CSS, 不许再冒出个算式。
+  assert(!/function fitBoard/.test(html), '又出现了 JS 算看板高度的 fitBoard, 这条路已经证明会算错');
+});
+
+test('U9 面板桌面: 看板的列永远排成一行, 放不下横向滚而不是换行', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  const flat = html.replace(/\s+/g, ' ');
+  // 最要命的一次回归: 用 grid 在 1100px 以下降成两列两行, 于是"列内滚动"的前提(单行)
+  // 不成立、自动退回整页滚。窗口没最大化、或 4K 屏上左右分屏, 天天撞上 —— 等于白做。
+  // flex + 不换行从根上消掉这个分支: 任何宽度下都是一行, 行为只有一种。
+  assert(/\.cols\s*\{[^}]*display\s*:\s*flex/.test(flat), '.cols 不是 flex, 又会出现换行成多行的分支');
+  assert(!/\.cols\s*\{[^}]*flex-wrap\s*:\s*wrap/.test(flat), '.cols 允许换行了, 列内滚动的前提会被打破');
+  assert(/\.col\s*\{[^}]*flex\s*:\s*0 0/.test(flat), '.col 不是固定宽度(flex:0 0 ...), 列会被压扁而不是横向滚');
+  assert(/#view \.cols\s*\{[^}]*overflow-x\s*:\s*auto/.test(flat), '列放不下时没有横向滚动, 会被挤出屏幕');
+  // 手机上必须退回整页竖排: 那里没有"另外三列被滚掉"的问题, 反而套小滚动条最难用。
+  // 注意要把**所有** max-width:760px 块拼起来再找 —— 文件里不止一个(横幅、快捷键各有一个),
+  // 只取第一个会抓到不相干的那块然后误报(写这条测试时就先踩了一次)。
+  const mob = [...html.matchAll(/@media \(max-width:\s*760px\)\s*\{([\s\S]*?)\n  \}/g)].map((m) => m[1]).join('\n');
+  assert(mob, '找不到 max-width:760px 媒体查询');
+  assert(/\.cols\s*\{\s*display\s*:\s*block/.test(mob), '手机上看板没退回竖排');
+  assert(/\.colbody\s*\{\s*overflow\s*:\s*visible/.test(mob), '手机上列内还套着滚动条');
+});
+
+test('U9 面板横幅: 按掉的 key 必须带任务名, 不能把以后的新问题一起静音', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  const m = /const dkey = ([\s\S]*?);\n/.exec(html);
+  assert(m, '找不到 dkey');
+  const dkey = eval('(' + m[1] + ')');
+  // 关键性质: key 认的是"这一批任务", 不是"这类提醒"。
+  // 要是 key 只有种类(比如恒为 "stale"), 按掉一次之后新任务停滞也永远不再提醒了 ——
+  // 那比不提醒更糟: 你以为没问题, 其实只是被自己静音了。
+  const a = dkey('stale', ['甲', '乙']);
+  const b = dkey('stale', ['乙', '甲']);
+  const c = dkey('stale', ['甲', '乙', '丙']);
+  assert(a === b, '同一批任务顺序不同却算出两个 key, 换个顺序按掉的就失效了');
+  assert(a !== c, '多了一个任务 key 却没变 —— 新出现的停滞任务会被旧的"按掉"吃掉');
+  assert(a.includes('甲') && a.includes('乙'), 'key 里没有任务名, 无法区分是哪一批');
+  assert(dkey('dup', ['甲', '乙']) !== a, '不同种类的横幅算出了同一个 key, 会互相误伤');
+});
+
+test('U9 面板卡片: 写具体日期而不是"短期", 且日期就是停滞天数的来源', () => {
+  const html = fs.readFileSync(path.join(REPO, 'tools', 'panel', 'panel.html'), 'utf8');
+  const m = /function metaLine\(t\)[\s\S]*?\n}/.exec(html);
+  assert(m, '找不到 metaLine');
+  const src = m[0];
+  // 用户原话: "你写'短期'我怎么能知道呢? 创建任务的时间不是有吗? 不然你怎么算出来停滞多少天的?"
+  // 卡片上写 horizon 说明不了任何事; 真正要看的是"上次动它是哪天"—— 那恰好就是 staleDays 的锚点。
+  assert(!/horizon/.test(src), '卡片第二行又开始写 horizon(短期/中期/长期)了, 它说明不了任何事');
+  assert(/lastActivity/.test(src), '卡片没显示最后活动日期 —— 那正是"停滞 N 天"算出来的依据');
+  assert(/staleDays/.test(src), '卡片不再显示停滞天数');
+  // 药丸别再堆回来: 四列并排时满屏灰圆角, 标题反而被淹
+  assert(!/class="chip/.test(src), '卡片又开始堆 chip 了');
 });
 
 test('U9 面板桌面: 快捷键不许在输入框里抢按键, 浮层开着时也不许生效', () => {

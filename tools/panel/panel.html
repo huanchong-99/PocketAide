@@ -56,52 +56,73 @@
   button.primary:hover{background:var(--accent);border-color:var(--accent)}
   button:disabled{opacity:.45;cursor:not-allowed}
 
-  .banner{border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;border:1px solid}
+  /* 横幅：正文左、动作键右。以前只有一句话没有出口——看到"发现疑似重复"却
+     既不能说"不是重复"也不能把它按掉，只能每天开面板都被同一句话拦一次。 */
+  .banner{border-radius:10px;padding:9px 12px 9px 14px;margin-bottom:8px;font-size:13px;border:1px solid;
+          display:flex;gap:12px;align-items:center;justify-content:space-between}
+  .btext{min-width:0}
+  .bacts{display:flex;gap:4px;flex:none;align-items:center}
   .b-warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
   .b-bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
   .b-ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
   .b-focus{background:var(--purple-bg);border-color:var(--purple-line);color:var(--purple)}
-  .bfocus{color:inherit;font-weight:600;white-space:nowrap;margin-left:6px;text-underline-offset:3px}
-  .bfocus:hover{text-decoration:none;background:#14141314;border-radius:5px}
+  .bact{color:inherit;font-weight:600;white-space:nowrap;font-size:12.5px;
+        padding:3px 9px;border-radius:7px;border:1px solid transparent}
+  .bact:hover{text-decoration:none;background:#ffffffb0;border-color:currentColor}
+  @media (max-width:760px){
+    .banner{flex-direction:column;align-items:stretch;gap:8px}
+    .bacts{justify-content:flex-end}
+  }
 
-  /* 看板 */
-  /* minmax(0,1fr) 而不是 1fr：1fr 的下限是 auto（= 内容最小宽度），卡片里那条
-     white-space:nowrap 的「下一步」会把第一列撑到 566px，把第四列挤出屏幕。 */
-  .cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:start}
-  .col{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:120px}
-  .col.drag{border-color:var(--acc);background:var(--ivory-dark)}
-  .col h3{margin:2px 0 10px;font-size:13px;display:flex;justify-content:space-between;color:var(--dim);font-weight:600}
-  .col h3 b{color:var(--fg)}
+  /* ── 看板 ────────────────────────────────────────────────────────────
+     结构上是「应用外壳」而不是「一张长网页」：桌面端整页锁死不滚（见下面的
+     min-width:761px 块），看板吃掉剩余高度，滚动只发生在每一列内部。
 
-  /* 桌面看板：每列各自滚，页面本身不滚。
-     1920 屏实测四列高度 [1341,150,457,150]：想看「进行中」最后一张卡就得把整页往下拉，
-     一拉，另外三列早就到底了，1191px 的空白跟着你一路滚，列头也全滚没了。
-     .fit 由 fitBoard() 按实际可用高度加上，横幅多几条、窗口很矮都不会算错。 */
-  .wrap.fitted{padding-bottom:18px}
-  .cols.fit .col{max-height:var(--boardh);overflow-y:auto;overscroll-behavior:contain;padding-top:0}
-  .cols.fit .col h3{position:sticky;top:0;z-index:1;margin:0 -10px 10px;padding:10px 10px 8px;
-                    background:var(--card2);box-shadow:0 1px 0 var(--line)}
-  /* 四条系统默认滚动条并排立在卡片边上太抢眼，收细 */
-  .cols.fit .col{scrollbar-width:thin;scrollbar-color:var(--cloud-light) transparent}
-  .cols.fit .col::-webkit-scrollbar{width:8px}
-  .cols.fit .col::-webkit-scrollbar-thumb{background:var(--cloud-light);border-radius:99px}
-  .cols.fit .col::-webkit-scrollbar-track{background:transparent}
+     列**永远排成一行**，放不下就横向滚，绝不换行。上一版用 grid 在 1100px
+     以下降成两列两行，结果列内滚动的前提（单行）不成立、自动退回整页滚——
+     窗口没最大化或 4K 屏上分屏就会撞上，等于白做。flex + nowrap 从根上消除
+     这个分支：任何宽度下都是一行，行为只有一种。
 
-  /* 卡片 */
-  .card{background:var(--card);border:1px solid var(--line);border-left-width:3px;border-radius:9px;
-        padding:9px 11px;margin-bottom:8px;cursor:pointer;min-width:0;transition:border-color .12s}
-  .card .t{overflow-wrap:anywhere}
-  .card:hover{border-color:var(--acc)}
+     视觉上参考 Kairos：列不是填色圆角盒子，只用一条竖分隔线隔开；列头是
+     粗体名 + 右侧计数。原来那种「四个填色大盒子」在大屏上很压抑。 */
+  .cols{display:flex;gap:0;align-items:stretch}
+  .col{flex:0 0 var(--colw,320px);min-width:0;display:flex;flex-direction:column;
+       padding:0 14px;border-left:1px solid var(--line)}
+  .col:first-child{border-left:0;padding-left:0}
+  .col.drag{background:#d9775714;border-radius:10px}
+  .col h3{margin:0 0 10px;font-size:13px;display:flex;justify-content:space-between;
+          align-items:center;color:var(--fg);font-weight:600;flex:none}
+  .col h3 span{color:var(--dim2);font-weight:500;font-size:12px;
+               background:var(--ivory-med);border-radius:99px;padding:1px 8px;min-width:22px;text-align:center}
+  .colbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+  /* 几条系统默认滚动条并排立在卡片边上太抢眼，收细 */
+  .colbody{scrollbar-width:thin;scrollbar-color:var(--cloud-light) transparent}
+  .colbody::-webkit-scrollbar{width:8px}
+  .colbody::-webkit-scrollbar-thumb{background:var(--cloud-light);border-radius:99px}
+  .colbody::-webkit-scrollbar-track{background:transparent}
+
+  /* 卡片：左侧一道优先级色条 + 标题 + 一行灰字。别再堆药丸了——四列并排时
+     满屏都是灰色小圆角，真正要读的标题反而被淹掉。 */
+  .card{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--cloud-light);
+        border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;min-width:0;
+        transition:border-color .12s,box-shadow .12s}
+  .card:hover{border-color:var(--line2);border-left-color:var(--acc);box-shadow:0 2px 8px #1414130f}
   .card.p高{border-left-color:var(--accent)} .card.p中{border-left-color:var(--kraft)} .card.p低{border-left-color:var(--cloud-light)}
-  .card .t{font-size:13px;line-height:1.45;margin-bottom:6px}
-  .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--dim)}
+  .card .t{font-size:13.5px;line-height:1.45;margin-bottom:5px;overflow-wrap:anywhere}
+  .meta{display:flex;gap:5px;flex-wrap:wrap;align-items:baseline;font-size:11.5px;color:var(--dim2)}
+  .meta b{font-weight:600}
+  .m-dot{font-style:normal;color:var(--cloud-med)}
+  .m-stale{color:var(--warn)} .m-stale.hot{color:var(--bad)}
+  .m-due{color:var(--ok)} .m-due.over{color:var(--bad)}
+  .m-proj{color:var(--purple)}
+  .next{color:var(--dim);font-size:11.5px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 列表/分组视图里还在用药丸，保留样式 */
   .chip{background:var(--card);border:1px solid var(--line2);border-radius:999px;padding:1px 7px;color:var(--dim)}
   .chip.stale{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
   .chip.stale.hot{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
   .chip.due{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
   .chip.due.over{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
   .chip.proj{background:var(--purple-bg);border-color:var(--purple-line);color:var(--purple)}
-  .next{color:var(--dim);font-size:11.5px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
   /* 四象限 */
   .quad{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -185,20 +206,41 @@
      卡片被截断，等于装了也没法用。所以窄屏逐级降列，并且把桌面才有的
      拖拽提示换成触屏能懂的说法（HTML5 drag 在触屏上根本不触发）。 */
   .only-narrow{display:none}
-  /* 宽屏别硬卡在 1500：1920 屏上那是 422px 白边（22% 的屏幕），换来的是四列各 355px、
-     标题和「下一步」双双截断。放到 1780 后每列 425px，同样的卡片能多显十来个字。 */
-  @media (min-width:1700px){
-    .wrap{max-width:1780px}
+
+  /* ── 桌面：应用外壳，整页锁死不滚 ───────────────────────────────────
+     Kairos 也是这么做的（body{overflow:hidden}）。整页能滚就必然出现
+     「为了看第 13 张卡把标题、横幅、工具栏、另外三列全滚出屏幕」——
+     这是最开始那版最大的毛病，靠 JS 算高度补不干净（算错一次就前功尽弃，
+     FIT_PAD 那次就是）。改成纯 CSS 的 flex 外壳：高度由浏览器分配，
+     横幅多几条、窗口拖动、接副屏，全都自动正确，没有需要维护的算式。 */
+  @media (min-width:761px){
+    html,body{height:100%;overflow:hidden}
+    .wrap{max-width:none;height:100%;display:flex;flex-direction:column;
+          padding:18px 26px 16px;gap:0}
+    /* 顶部（标题/横幅/工具栏）固定，看板吃掉剩下的高度 */
+    #view{flex:1;min-height:0;overflow:auto}
+    /* 看板：列不换行，多到放不下就横向滚 */
+    #view .cols{height:100%;overflow-x:auto;overflow-y:hidden}
+    #view .cols{scrollbar-width:thin;scrollbar-color:var(--cloud-light) transparent}
+    #view .cols::-webkit-scrollbar{height:9px}
+    #view .cols::-webkit-scrollbar-thumb{background:var(--cloud-light);border-radius:99px}
   }
-  @media (max-width:1100px){
-    .cols{grid-template-columns:repeat(2,minmax(0,1fr))}
-  }
+  /* 屏幕越宽列就越宽，但不无限撑：4K 上四列各 320px 会瘦得可笑，各 700px 又太空 */
+  @media (min-width:1500px){ .cols{--colw:380px} }
+  @media (min-width:2000px){ .cols{--colw:440px} }
+  @media (min-width:2800px){ .cols{--colw:500px} }
+
   @media (max-width:760px){
     .wrap{padding:14px 12px 48px}
     h1{font-size:19px}
+    /* 手机上看板竖排成一列一列，整页滚才对——那里没有"另外三列被滚掉"的问题 */
+    .cols{display:block}
+    .col{border-left:0;border-top:1px solid var(--line);padding:12px 0 0;margin-top:12px}
+    .col:first-child{border-top:0;margin-top:0;padding-top:0}
+    .colbody{overflow:visible}
     /* 必须 minmax(0,1fr) 而不是 1fr —— 同一个坑栽过两次：1fr 的下限是 auto(内容最小宽度)，
        单列时列会被卡片内容顶到比视口还宽，整页横向溢出。已有测试钉死这条。 */
-    .cols,.quad{grid-template-columns:minmax(0,1fr)}
+    .quad{grid-template-columns:minmax(0,1fr)}
     .grp .cards{grid-template-columns:minmax(0,1fr)}
     .only-narrow{display:inline}
     .only-wide{display:none}
@@ -294,6 +336,9 @@ let cur = null;               // 抽屉里打开的任务
 // 体检横幅点「只看这些」后的聚焦集合：{label, names:Set}。不落 prefs——
 // 它是"我现在要处理这一批"的临时视角，不该在明天打开面板时还扣着。
 let focus = null;
+// 离线横幅按掉：只在本次离线期间有效——服务端这会儿连不上、存不下来，
+// 而恢复联机后这条本来也不该再出现。
+let offlineHidden = false;
 
 // 视图/筛选/排序记在本地：每次刷新都跳回「看板·无筛选」很烦——
 // 你盯着"项目=求职"看了一上午，一次自动刷新就给你清了。
@@ -380,28 +425,46 @@ function setFocus(names, label) {
 
 // ---------------------------------------------------------------- 卡片
 
-function chips(t) {
+/** 日期显示成 6-16；跨年了才带上年份，否则一眼看去全是 2026- 的噪声。 */
+const NOW_Y = new Date().getFullYear();
+function shortDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+  if (!m) return '';
+  return +m[1] === NOW_Y ? `${+m[2]}-${+m[3]}` : `${m[1]}-${+m[2]}-${+m[3]}`;
+}
+
+/**
+ * 卡片第二行。以前这里堆 3~6 个 chip（停滞 92 天 / 短期 / 1 条进度 / 高 …），
+ * 四列并排时整屏都是灰药丸，真正要看的标题反而被淹了。现在只留一行，且：
+ *
+ * - **写具体日期，不写"短期"**。"短期/中期/长期"在卡片上说明不了任何事——
+ *   看到"停滞 92 天"时想知道的是"上一次动它是哪天"，那个日期恰恰就是这个数的来源。
+ *   周期还在抽屉里、也还能筛选，只是不占卡片。
+ * - 优先级不再单列一个 chip：左边那道色条就是它。
+ */
+function metaLine(t) {
   const c = [];
-  if (t.staleDays != null && t.staleDays >= 7 && !closed(t)) {
+  const done = closed(t);
+  if (!done && t.staleDays != null && t.staleDays >= 7) {
     const hot = t.staleDays >= (S.meta.staleThreshold || 30);
-    c.push('<span class="chip stale' + (hot ? ' hot' : '') + '">停滞 ' + t.staleDays + ' 天</span>');
+    c.push('<b class="m-stale' + (hot ? ' hot' : '') + '">停滞 ' + t.staleDays + ' 天</b>');
   }
-  if (t.daysLeft != null && !closed(t)) {
-    c.push('<span class="chip due' + (t.daysLeft < 0 ? ' over' : '') + '">' +
-      (t.daysLeft < 0 ? '逾期 ' + (-t.daysLeft) + ' 天' : t.daysLeft === 0 ? '今天截止' : '剩 ' + t.daysLeft + ' 天') + '</span>');
+  const anchor = shortDate(done ? (t.completed || t.lastActivity) : t.lastActivity);
+  if (anchor) c.push('<span>' + (done ? '完成于 ' : '最后动 ') + anchor + '</span>');
+  if (!done && t.daysLeft != null) {
+    c.push('<b class="m-due' + (t.daysLeft < 0 ? ' over' : '') + '">' +
+      (t.daysLeft < 0 ? '逾期 ' + (-t.daysLeft) + ' 天' : t.daysLeft === 0 ? '今天截止' : '剩 ' + t.daysLeft + ' 天') +
+      (t.deadline ? '（' + shortDate(t.deadline) + '）' : '') + '</b>');
   }
-  if (t.project) c.push('<span class="chip proj">' + esc(t.project) + '</span>');
-  if (t.horizon) c.push('<span class="chip">' + esc(t.horizon) + '</span>');
-  if (t.priority) c.push('<span class="chip">' + esc(t.priority) + '</span>');
-  if (t.progressCount) c.push('<span class="chip">' + t.progressCount + ' 条进度</span>');
-  return c.join('');
+  if (t.project) c.push('<span class="m-proj">' + esc(t.project) + '</span>');
+  return c.join('<i class="m-dot">·</i>');
 }
 
 const cardHtml = (t) =>
   '<div class="card' + (t.priority ? ' p' + t.priority : '') + '" draggable="' + (S.offline ? 'false' : 'true') +
   '" data-name="' + esc(t.name) + '" data-bucket="' + esc(t.bucket) + '">' +
     '<div class="t">' + esc(t.title) + '</div>' +
-    '<div class="meta">' + chips(t) + '</div>' +
+    '<div class="meta">' + metaLine(t) + '</div>' +
     (t.nextFirst ? '<div class="next">→ ' + esc(t.nextFirst) + '</div>' : '') +
   '</div>';
 
@@ -420,7 +483,6 @@ function render() {
   else if (view === 'archive') v.innerHTML = renderList('archive');
   else v.innerHTML = renderHealth();
   wire();
-  fitBoard();
 }
 
 /** 标签页标题带上信号。面板在电脑上多半是钉住的后台标签——
@@ -434,28 +496,11 @@ function syncTitle() {
   document.title = (bits.length ? bits.join(' ') + ' · ' : '') + '任务面板';
 }
 
-/** 桌面看板：把每列高度钉到"视口还剩多少"，列内自己滚、页面不滚、列头吸顶。
-    窄屏（单列）不适用——那里整页滚才是对的，锁高度只会变成四个小滚动条。 */
-const FIT_PAD = 18;   // 看板锁高时页面底部留白，和 .wrap.fitted 的 padding-bottom 一致
-function fitBoard() {
-  const wrap = $('wrap'), cols = document.querySelector('#view .cols');
-  wrap.classList.remove('fitted');
-  if (!cols) return;
-  cols.classList.remove('fit');
-  // 只有四列并排成一行时锁高才有意义。窄到降两列/单列时网格是多行，
-  // 每列还按整屏高算的话两行叠起来页面照样滚——比不锁更糟。
-  // 用"所有列 offsetTop 相同"判断而不是写死断点：以后再加断点也不用回来改这里。
-  if (innerWidth <= 760) return;
-  if (new Set([...cols.children].map((c) => c.offsetTop)).size > 1) return;
-  // getBoundingClientRect().top + scrollY = 文档坐标，跟当前滚没滚无关，所以这个值稳定。
-  // 底部要按 .fitted 的留白算，否则整页还差几十像素能滚——那看板就白锁了。
-  const avail = Math.floor(innerHeight - (cols.getBoundingClientRect().top + scrollY) - FIT_PAD);
-  // 横幅堆了好几条、或者窗口本来就矮：可用高度太小就退回整页滚，别把列压成一条缝
-  if (avail < 260) return;
-  cols.style.setProperty('--boardh', avail + 'px');
-  cols.classList.add('fit');
-  wrap.classList.add('fitted');
-}
+// 看板高度不再由 JS 算。以前是 fitBoard() 量出"视口还剩多少"再把每列 max-height 钉死，
+// 前后栽了两次：底部留白写成 24 而 .wrap 是 60（整页残留 35px 可滚）、以及 1100px 以下
+// 降成两列两行后每列仍按整屏高算（两行叠起来页面滚得更长）。现在整个交给 CSS：
+// 桌面下 html/body 锁死不滚、.wrap 是 flex 列、#view 吃掉剩余高度、列内 .colbody 滚。
+// 浏览器自己会随窗口和横幅数量重排，没有需要维护的算式，也就没有算错的可能。
 
 function subLine() {
   const c = (S.health && S.health.counts) || {};
@@ -471,41 +516,78 @@ const focusSets = {};
 function focusLink(key, names, label) {
   if (!names.length) return '';
   focusSets[key] = { names, label };
-  return ' <a href="#" class="bfocus" data-focus="' + esc(key) + '">只看这些 →</a>';
+  return '<a href="#" class="bact bfocus" data-focus="' + esc(key) + '">只看这些 →</a>';
+}
+
+/**
+ * 横幅的按掉键。
+ *
+ * key 里带上**涉及的任务名**（排序后），所以按掉的是「这一批」而不是「这类提醒」：
+ * 再有新任务停滞、或重复组的成员变了，key 就变了，横幅照常回来。
+ * 否则就成了"眼不见为净"——把真出现的新问题一起静音掉，比不提醒还糟。
+ */
+const dkey = (kind, names) => kind + ':' + [...names].sort().join('|');
+const isDismissed = (key) => !!(S.dismissed && S.dismissed[key]);
+function dismissBtn(key, label) {
+  return '<a href="#" class="bact bdismiss" data-key="' + esc(key) + '" title="按掉这条；' +
+    '涉及的任务有变化时会重新出现">' + (label || '知道了 ×') + '</a>';
 }
 
 function banners() {
   if (!S.health) return '';
   const h = S.health, out = [];
+  const row = (cls, html) => out.push('<div class="banner ' + cls + '"><div class="btext">' + html.text + '</div>' +
+    '<div class="bacts">' + (html.acts || '') + '</div></div>');
+
   if (focus) {
-    out.push('<div class="banner b-focus">🔎 只看「<b>' + esc(focus.label) + '</b>」' +
-      '（' + focus.names.size + ' 个任务）<a href="#" class="bfocus" data-focus="">显示全部 ×</a></div>');
+    row('b-focus', {
+      text: '🔎 只看「<b>' + esc(focus.label) + '</b>」（' + focus.names.size + ' 个任务）',
+      acts: '<a href="#" class="bact bfocus" data-focus="">显示全部 ×</a>',
+    });
   }
   // 联动状态优先：如果改动发不到飞书，这是你最该先知道的事——
   // 否则你在面板上改了一上午，以为手机那头都同步了，其实一条没出去。
+  // 这条**不给按掉**：它不是提醒，是故障，按掉只会让你以为一切正常。
   if (S.link && !S.link.ok && !S.offline) {
-    out.push('<div class="banner b-bad">🔌 <b>飞书联动未生效</b> —— ' + esc(S.link.reason) +
-      '<br><span style="opacity:.75">面板上的改动照常写进任务文件，只是不会在飞书里播报。</span></div>');
+    row('b-bad', { text: '🔌 <b>飞书联动未生效</b> —— ' + esc(S.link.reason) +
+      '<br><span style="opacity:.75">面板上的改动照常写进任务文件，只是不会在飞书里播报。</span>' });
   }
-  if (S.offline) {
-    out.push('<div class="banner b-warn">⚠ 面板服务没在运行，正在显示<b>离线快照</b>' +
-      (S.snapshotAt ? '（' + esc(String(S.snapshotAt).slice(0, 16).replace('T', ' ')) + '）' : '') +
-      '。可以查看，但改不了——从托盘启动面板后刷新即可。</div>');
+  // 离线快照可以按掉：知道了就不必一直占着一条。按掉只在本次离线期间有效
+  // （服务端这会儿连不上，存不了；恢复联机后本来也不该再显示）。
+  if (S.offline && !offlineHidden) {
+    row('b-warn', {
+      text: '⚠ 面板服务没在运行，正在显示<b>离线快照</b>' +
+        (S.snapshotAt ? '（' + esc(String(S.snapshotAt).slice(0, 16).replace('T', ' ')) + '）' : '') +
+        '。可以查看，但改不了——从托盘启动面板后刷新即可。',
+      acts: '<a href="#" class="bact" id="hideOffline">知道了 ×</a>',
+    });
   }
   if (h.overdue && h.overdue.length) {
-    out.push('<div class="banner b-bad">⛔ <b>' + h.overdue.length + '</b> 个任务已逾期：' +
-      h.overdue.slice(0, 3).map((x) => esc(x.title) + '（' + (-x.left) + ' 天）').join('、') +
-      focusLink('overdue', h.overdue.map((x) => x.name), '已逾期') + '</div>');
+    const names = h.overdue.map((x) => x.name), k = dkey('overdue', names);
+    if (!isDismissed(k)) row('b-bad', {
+      text: '⛔ <b>' + h.overdue.length + '</b> 个任务已逾期：' +
+        h.overdue.slice(0, 3).map((x) => esc(x.title) + '（' + (-x.left) + ' 天）').join('、'),
+      acts: focusLink('overdue', names, '已逾期') + dismissBtn(k),
+    });
   }
   if (h.stale && h.stale.length) {
-    out.push('<div class="banner b-warn">⏳ <b>' + h.stale.length + '</b> 个进行中的任务停滞超过 ' +
-      h.staleThreshold + ' 天，最久 <b>' + h.stale[0].days + ' 天</b>：' + esc(h.stale[0].title) +
-      focusLink('stale', h.stale.map((x) => x.name), '停滞超过 ' + h.staleThreshold + ' 天') + '</div>');
+    const names = h.stale.map((x) => x.name), k = dkey('stale', names);
+    if (!isDismissed(k)) row('b-warn', {
+      text: '⏳ <b>' + h.stale.length + '</b> 个进行中的任务停滞超过 ' + h.staleThreshold +
+        ' 天，最久 <b>' + h.stale[0].days + ' 天</b>：' + esc(h.stale[0].title),
+      acts: focusLink('stale', names, '停滞超过 ' + h.staleThreshold + ' 天') + dismissBtn(k),
+    });
   }
-  if (h.duplicates && h.duplicates.length) {
-    out.push('<div class="banner b-warn">🔁 发现 <b>' + h.duplicates.length + '</b> 组疑似重复：' +
-      h.duplicates.map((g) => g.map((x) => esc(x.title)).join(' × ')).join('；') +
-      focusLink('dup', h.duplicates.flat().map((x) => x.name), '疑似重复') + '</div>');
+  // 重复：一组一条横幅，各自独立按掉。以前是把所有组挤在一句话里，
+  // 既看不清哪几个跟哪几个重，也没法只否掉其中一组。
+  for (const g of (h.duplicates || [])) {
+    const names = g.map((x) => x.name), k = dkey('dup', names);
+    if (isDismissed(k)) continue;
+    row('b-warn', {
+      text: '🔁 疑似重复：' + g.map((x) => '<b>' + esc(x.title) + '</b>').join(' × '),
+      acts: focusLink('dup:' + k, names, '疑似重复') +
+        dismissBtn(k, '不是重复 ×'),
+    });
   }
   return out.join('');
 }
@@ -515,8 +597,11 @@ function renderBoard() {
   return '<div class="cols">' + ST_ORDER.map((s) => {
     const list = ts.filter((t) => t.status === s)
       .sort((a, b) => (b.staleDays || 0) - (a.staleDays || 0));
+    // 列头在 .col 上、卡片在 .colbody 里：滚动只发生在 .colbody，列头就自然一直在。
     return '<div class="col" data-status="' + s + '"><h3><b>' + ST_CN[s] + '</b><span>' + list.length + '</span></h3>' +
-      (list.length ? list.map(cardHtml).join('') : '<div class="empty">空</div>') + '</div>';
+      '<div class="colbody">' +
+      (list.length ? list.map(cardHtml).join('') : '<div class="empty">空</div>') +
+      '</div></div>';
   }).join('') + '</div>';
 }
 
@@ -737,13 +822,32 @@ function wire() {
   if (!S.offline) { wireDragBoard(); wireDragQuad(); }
 }
 
-// 横幅上的「只看这些 →」/「显示全部 ×」。横幅每次 render 都重建，所以绑在容器上。
-$('banners').addEventListener('click', (e) => {
-  const a = e.target.closest('.bfocus');
+// 横幅上的动作键。横幅每次 render 都重建，所以绑在容器上。
+$('banners').addEventListener('click', async (e) => {
+  const a = e.target.closest('a');
   if (!a) return;
   e.preventDefault();
-  const set = focusSets[a.dataset.focus];
-  setFocus(set ? set.names : null, set ? set.label : '');
+
+  if (a.classList.contains('bfocus')) {
+    const set = focusSets[a.dataset.focus];
+    return setFocus(set ? set.names : null, set ? set.label : '');
+  }
+  if (a.id === 'hideOffline') { offlineHidden = true; return render(); }
+  if (a.classList.contains('bdismiss')) {
+    const key = a.dataset.key;
+    if (S.offline) return toast('离线快照改不了，联机后再按', true);
+    // 先本地生效再落盘：等一个来回才消失会让人以为没点上
+    S.dismissed = Object.assign({}, S.dismissed, { [key]: { at: new Date().toISOString() } });
+    render();
+    try {
+      await api('dismiss', { key });
+      toast(key.startsWith('dup:') ? '已记下：这组不是重复' : '已按掉，这批任务有变化时会再提醒');
+    } catch (err) {
+      delete S.dismissed[key];   // 没存上就退回去，别让人以为按掉了其实没有
+      render();
+      toast('按掉失败：' + err.message, true);
+    }
+  }
 });
 
 /** 看板拖拽：拖到另一列 = 改状态。 */
@@ -936,10 +1040,6 @@ document.querySelectorAll('.tab').forEach((b) =>
 $('keys').innerHTML = '<h4>快捷键</h4>' +
   KEY_HELP.map(([k, d]) => '<div><kbd>' + esc(k) + '</kbd><span>' + esc(d) + '</span></div>').join('');
 $('btnKeys').onclick = () => $('keys').classList.toggle('on');
-
-// 改窗口大小要重算看板可用高度：桌面上把窗口拖到半屏、或接上副屏，都属于日常操作
-let fitT = 0;
-addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(fitBoard, 120); });
 
 /** 直接打开收藏的 #t/任务名：先把地址栏复位成干净基点，再照常 open() 推一条历史，
     这样「后退」才有地方可退（否则第一次后退就把整个面板退没了）。 */
